@@ -269,6 +269,7 @@
     font-weight: 800;
     line-height: 0.88;
     letter-spacing: 0.09em;
+    color: oklch(56.253% 0.21872 28.089);
     white-space: nowrap;
     text-transform: uppercase;
 }
