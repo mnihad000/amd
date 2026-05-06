@@ -31,85 +31,52 @@ from .sources import (
     usable_sources,
 )
 from .training import train_dataset
+from .run_lifecycle import PipelineRunContext, StageName
 from .utils import ensure_dir, write_json
 from .web_search import search_web_image_candidates
 from .youtube_search import download_youtube_sources, search_youtube_candidates
 
 
 class PipelineRunner:
-    def __init__(self, config: JobConfig) -> None:
+    def __init__(self, config: JobConfig, run_context: PipelineRunContext | None = None) -> None:
         self.config = config
+        self._run_context = run_context or PipelineRunContext()
+
+    def set_run_context(self, run_context: PipelineRunContext) -> None:
+        self._run_context = run_context
 
     def run(self) -> RunSummary:
-        bootstrap = run_bootstrap_checks(
-            self.config.source.ffmpeg_path,
-            self.config.source.yt_dlp_path,
+        bootstrap, job_paths = self._run_stage(
+            "bootstrap",
+            lambda: (
+                run_bootstrap_checks(
+                    self.config.source.ffmpeg_path,
+                    self.config.source.yt_dlp_path,
+                ),
+                self._build_job_paths(self.config.output_root, self.config.job_id),
+            ),
         )
-        job_paths = self._build_job_paths(self.config.output_root, self.config.job_id)
-        requested_classes = normalize_classes(self.config.classes)
-
-        class_plan = build_initial_class_plan(self.config.prompt, requested_classes)
-        source_manifest, source_notes = self._resolve_source_manifest(
-            requested_classes,
-            job_paths,
-            bootstrap,
+        requested_classes, class_plan = self._run_stage(
+            "class_planning",
+            lambda: self._plan_classes(),
         )
-        class_plan = attach_source_counts(class_plan, usable_sources(source_manifest))
-
-        candidate_classes = [
-            entry.name for entry in class_plan if entry.final_state in {"ready", "risky"}
-        ]
-        web_sources = collect_web_image_sources(source_manifest, candidate_classes)
-        video_sources = collect_youtube_video_sources(source_manifest, candidate_classes)
-
-        extracted_frames, extraction_notes = extract_video_frames(
-            video_sources,
-            job_paths,
-            self.config,
-            bootstrap.ffmpeg_available,
+        source_manifest, source_notes, web_sources, video_sources, class_plan = self._run_stage(
+            "source_resolution",
+            lambda: self._resolve_sources(job_paths, bootstrap, requested_classes, class_plan),
         )
-        all_samples = normalize_sources_to_samples(web_sources, extracted_frames)
-        accepted_samples, rejected_samples, frame_scores = score_and_filter_samples(
-            all_samples,
-            self.config.critic,
+        _extracted_frames, extraction_notes, all_samples = self._run_stage(
+            "frame_extraction",
+            lambda: self._extract_samples(video_sources, web_sources, job_paths, bootstrap),
         )
-        balanced_samples = rebalance_samples(
-            accepted_samples,
-            self.config.mix,
-            self.config.budgets.max_accepted_samples,
+        balanced_samples, frame_scores, class_plan, admitted_for_labeling = self._run_stage(
+            "critic",
+            lambda: self._critic_stage(all_samples, class_plan),
         )
-
-        admitted_for_labeling = determine_label_admission(
+        label_records, validation_errors, class_plan, extraction_notes = self._label_stage(
             class_plan,
             balanced_samples,
-            self.config.critic,
-        )
-        class_map = {class_name: index for index, class_name in enumerate(admitted_for_labeling)}
-        label_inputs = [
-            sample
-            for sample in balanced_samples
-            if set(sample.class_names).intersection(admitted_for_labeling)
-        ]
-        label_records: list[LabelRecord] = []
-        validation_errors: list[LabelRecord] = []
-
-        if admitted_for_labeling and label_inputs:
-            provider = build_label_provider(self.config.label)
-            limited_inputs = label_inputs[: self.config.budgets.max_label_calls]
-            raw_labels = provider.label_samples(limited_inputs, admitted_for_labeling, class_map)
-            label_records, validation_errors = validate_label_records(
-                raw_labels,
-                admitted_for_labeling,
-                self.config.critic.min_label_confidence,
-            )
-        else:
-            extraction_notes.append("No classes met the pre-labeling admission threshold.")
-
-        class_plan = finalize_class_plan(
-            class_plan,
-            balanced_samples,
-            label_records,
-            self.config.critic,
+            admitted_for_labeling,
+            extraction_notes,
         )
         admitted_for_training = [entry.name for entry in class_plan if entry.final_state == "ready"]
 
@@ -119,19 +86,185 @@ class PipelineRunner:
             for sample in balanced_samples
             if sample.id in {record.sample_id for record in filtered_labels}
         ]
-        dataset_result = build_dataset(
-            job_paths,
-            filtered_samples,
-            filtered_labels,
-            admitted_for_training,
+        dataset_result = self._run_stage(
+            "dataset_build",
+            lambda: build_dataset(
+                job_paths,
+                filtered_samples,
+                filtered_labels,
+                admitted_for_training,
+            ),
         )
-        training_result = train_dataset(dataset_result, job_paths, self.config.training)
-        evaluation_report = evaluate_run(training_result, class_plan)
-        iteration_decision = decide_next_step(evaluation_report, class_plan)
+        training_result = self._run_stage(
+            "training",
+            lambda: train_dataset(dataset_result, job_paths, self.config.training),
+        )
+        evaluation_report = self._run_stage(
+            "evaluation",
+            lambda: evaluate_run(training_result, class_plan),
+        )
+        iteration_decision = self._run_stage(
+            "iteration",
+            lambda: decide_next_step(evaluation_report, class_plan),
+        )
 
         source_breakdown = Counter(sample.source_type for sample in balanced_samples)
         notes = bootstrap.warnings + source_notes + extraction_notes
 
+        return self._run_stage(
+            "finalize",
+            lambda: self._finalize_run(
+                bootstrap=bootstrap,
+                job_paths=job_paths,
+                requested_classes=requested_classes,
+                class_plan=class_plan,
+                source_manifest=source_manifest,
+                all_samples=all_samples,
+                frame_scores=frame_scores,
+                balanced_samples=balanced_samples,
+                label_records=label_records,
+                validation_errors=validation_errors,
+                dataset_result=dataset_result,
+                training_result=training_result,
+                evaluation_report=evaluation_report,
+                iteration_decision=iteration_decision,
+                source_breakdown=dict(source_breakdown),
+                notes=notes,
+                admitted_for_training=admitted_for_training,
+            ),
+        )
+
+    def _run_stage(self, stage_name: StageName, func):
+        self._run_context.start_stage(stage_name)
+        try:
+            result = func()
+        except Exception:
+            self._run_context.fail_stage(stage_name)
+            raise
+        self._run_context.complete_stage(stage_name)
+        return result
+
+    def _resolve_sources(
+        self,
+        job_paths: JobPaths,
+        bootstrap: BootstrapReport,
+        requested_classes: list[str],
+        class_plan,
+    ):
+        source_manifest, source_notes = self._resolve_source_manifest(
+            requested_classes,
+            job_paths,
+            bootstrap,
+        )
+        class_plan = attach_source_counts(class_plan, usable_sources(source_manifest))
+        candidate_classes = [
+            entry.name for entry in class_plan if entry.final_state in {"ready", "risky"}
+        ]
+        web_sources = collect_web_image_sources(source_manifest, candidate_classes)
+        video_sources = collect_youtube_video_sources(source_manifest, candidate_classes)
+        return source_manifest, source_notes, web_sources, video_sources, class_plan
+
+    def _plan_classes(self) -> tuple[list[str], list]:
+        requested_classes = normalize_classes(self.config.classes)
+        class_plan = build_initial_class_plan(self.config.prompt, requested_classes)
+        return requested_classes, class_plan
+
+    def _extract_samples(
+        self,
+        video_sources,
+        web_sources,
+        job_paths: JobPaths,
+        bootstrap: BootstrapReport,
+    ):
+        extracted_frames, extraction_notes = extract_video_frames(
+            video_sources,
+            job_paths,
+            self.config,
+            bootstrap.ffmpeg_available,
+        )
+        all_samples = normalize_sources_to_samples(web_sources, extracted_frames)
+        return extracted_frames, extraction_notes, all_samples
+
+    def _critic_stage(self, all_samples, class_plan):
+        accepted_samples, rejected_samples, frame_scores = score_and_filter_samples(
+            all_samples,
+            self.config.critic,
+        )
+        balanced_samples = rebalance_samples(
+            accepted_samples,
+            self.config.mix,
+            self.config.budgets.max_accepted_samples,
+        )
+        admitted_for_labeling = determine_label_admission(
+            class_plan,
+            balanced_samples,
+            self.config.critic,
+        )
+        del rejected_samples
+        return balanced_samples, frame_scores, class_plan, admitted_for_labeling
+
+    def _label_stage(
+        self,
+        class_plan,
+        balanced_samples,
+        admitted_for_labeling,
+        extraction_notes: list[str],
+    ):
+        label_records: list[LabelRecord] = []
+        validation_errors: list[LabelRecord] = []
+        label_inputs = [
+            sample
+            for sample in balanced_samples
+            if set(sample.class_names).intersection(admitted_for_labeling)
+        ]
+
+        if admitted_for_labeling and label_inputs:
+            def perform_labeling():
+                class_map = {class_name: index for index, class_name in enumerate(admitted_for_labeling)}
+                provider = build_label_provider(self.config.label)
+                limited_inputs = label_inputs[: self.config.budgets.max_label_calls]
+                raw_labels = provider.label_samples(limited_inputs, admitted_for_labeling, class_map)
+                return validate_label_records(
+                    raw_labels,
+                    admitted_for_labeling,
+                    self.config.critic.min_label_confidence,
+                )
+
+            label_records, validation_errors = self._run_stage("labeling", perform_labeling)
+        else:
+            self._run_context.checkpoint()
+            self._run_context.skip_stage("labeling")
+            extraction_notes.append("No classes met the pre-labeling admission threshold.")
+
+        class_plan = finalize_class_plan(
+            class_plan,
+            balanced_samples,
+            label_records,
+            self.config.critic,
+        )
+        return label_records, validation_errors, class_plan, extraction_notes
+
+    def _finalize_run(
+        self,
+        *,
+        bootstrap: BootstrapReport,
+        job_paths: JobPaths,
+        requested_classes: list[str],
+        class_plan,
+        source_manifest,
+        all_samples,
+        frame_scores,
+        balanced_samples,
+        label_records: list[LabelRecord],
+        validation_errors: list[LabelRecord],
+        dataset_result,
+        training_result,
+        evaluation_report,
+        iteration_decision,
+        source_breakdown: dict[str, int],
+        notes: list[str],
+        admitted_for_training: list[str],
+    ) -> RunSummary:
         artifacts = {
             "bootstrap": str(job_paths.reports / "bootstrap.json"),
             "class_plan": str(job_paths.reports / "class_plan.json"),
@@ -164,7 +297,7 @@ class PipelineRunner:
             admitted_classes=admitted_for_training,
             deferred_classes=[entry.name for entry in class_plan if entry.final_state == "risky"],
             blocked_classes=[entry.name for entry in class_plan if entry.final_state == "blocked"],
-            source_breakdown=dict(source_breakdown),
+            source_breakdown=source_breakdown,
             budgets={
                 "max_runtime_seconds": self.config.budgets.max_runtime_seconds,
                 "max_downloaded_sources": self.config.budgets.max_downloaded_sources,

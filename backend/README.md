@@ -60,7 +60,7 @@ python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --
 
 ## API quick start
 
-A thin FastAPI wrapper is available for synchronous runs:
+The FastAPI service now exposes an async run lifecycle intended for browser polling and the `frontend/app` dashboard:
 
 ```powershell
 cd backend
@@ -70,8 +70,42 @@ ada-api --host 127.0.0.1 --port 8000
 Endpoints:
 
 - `POST /runs`
+  Returns `202 Accepted` with an initial `queued` run resource.
+- `GET /runs`
+  Returns recent runs ordered by `updated_at` descending.
 - `GET /runs/{job_id}`
+  Returns lifecycle status, stage history, timestamps, cancellation flag, summary, and error details.
+- `POST /runs/{job_id}/cancel`
+  Requests cooperative cancellation for `queued` or `running` jobs.
+- `GET /health`
+  Returns queue depth, active worker count, and configured artifact/index paths.
 - `GET /runs/{job_id}/artifacts`
+  Returns the artifact index with API URLs and safe file URLs.
+- `GET /runs/{job_id}/artifacts/{artifact_name}`
+  Returns parsed JSON content for known report artifacts.
+- `GET /runs/{job_id}/files/{relative_path}`
+  Serves preview-safe files rooted to the run directory.
+
+Lifecycle statuses:
+
+- `queued`
+- `running`
+- `completed`
+- `failed`
+
+Stage timeline:
+
+- `bootstrap`
+- `class_planning`
+- `source_resolution`
+- `frame_extraction`
+- `critic`
+- `labeling`
+- `dataset_build`
+- `training`
+- `evaluation`
+- `iteration`
+- `finalize`
 
 ## Source modes
 

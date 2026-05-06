@@ -13,6 +13,7 @@ from autonomous_dataset_agent.class_planner import build_initial_class_plan, fin
 from autonomous_dataset_agent.config import JobConfig, LabelConfig, SourceConfig, TrainingConfig
 from autonomous_dataset_agent.contracts import BudgetLimits, CriticThresholds, LabelBox, LabelRecord, SampleRecord, SourceMix
 from autonomous_dataset_agent.orchestrator import PipelineRunner
+from autonomous_dataset_agent.run_lifecycle import PIPELINE_STAGES, PipelineRunContext
 
 
 PNG_BYTES = base64.b64decode(
@@ -143,11 +144,19 @@ class PipelineTests(unittest.TestCase):
                 mix=SourceMix(),
             )
 
-            summary = PipelineRunner(config).run()
+            stage_events: list[tuple[str, str]] = []
+            summary = PipelineRunner(
+                config,
+                run_context=PipelineRunContext(
+                    stage_update=lambda stage_name, status: stage_events.append((stage_name, status))
+                ),
+            ).run()
             self.assertIn("forklift", summary.admitted_classes)
             self.assertIn("pallet jack", summary.admitted_classes)
             self.assertIn("ghost", summary.blocked_classes)
             self.assertTrue(Path(summary.artifact_paths["run_summary"]).exists())
+            started_stages = [stage_name for stage_name, status in stage_events if status == "running"]
+            self.assertEqual(started_stages, list(PIPELINE_STAGES))
         finally:
             if root.exists():
                 shutil.rmtree(root)
