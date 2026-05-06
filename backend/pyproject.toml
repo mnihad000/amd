@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomous-dataset-agent-backend"
+version = "0.1.0"
+description = "CLI-first backend for the Autonomous Dataset Agent MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "OpenAI Codex" }]
+dependencies = [
+  "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+train = ["ultralytics>=8.3.0"]
+
+[project.scripts]
+ada-pipeline = "autonomous_dataset_agent.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

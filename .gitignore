@@ -1,1 +1,15 @@
-.claude/ 
+.claude/
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+backend/.python-version
+backend/artifacts/
+backend/jobs/
+backend/raw_sources/
+backend/downloads/
+backend/frames/
+backend/datasets/
+backend/models/
+backend/reports/

@@ -1,37 +1,36 @@
 # TASKS.md
 
-# Autonomous Dataset Agent — Team Tasks (2-Person Build)
+# Autonomous Dataset Agent - Team Tasks (2-Person Build)
 
 ## Overview
 
-This document breaks the project into clear tasks for a **2-person team** building the hackathon MVP.
+This document tracks the current MVP build for a **2-person team**. It separates:
 
-The goal is to ship an end-to-end demo where a user can enter a target like:
+- decisions that are already locked
+- implementation tasks that are still open
+- explicit v1 simplifications and later improvements
 
-> `"forklift in a warehouse"`
+The backend MVP is now based on:
 
-and the system will:
-- gather source material
-- extract and filter frames
-- auto-label accepted images
-- build a YOLO dataset
-- train a detector
-- evaluate results
-- return both the model and the dataset
-
-Because the team is small, tasks are split by **ownership**, **priority**, and **dependency**.
+- CLI-first orchestration
+- prompt-driven class input
+- **dynamic class admission** instead of hard class caps
+- **structured web-image ingestion + YouTube ingestion**
+- a **70/30 accepted-set target mix** between web images and video-derived frames
+- a **generic label-provider interface** with **Gemini first**
 
 ---
 
 ## Team Roles
 
-## Person A — ML / Backend / Pipeline
+## Person A - ML / Backend / Pipeline
 Owns the core dataset and model pipeline.
 
 ### Main responsibilities
 - source ingestion
 - frame extraction
 - frame scoring / filtering
+- class planning and admission
 - auto-labeling pipeline
 - YOLO dataset creation
 - training + evaluation
@@ -39,7 +38,7 @@ Owns the core dataset and model pipeline.
 
 ---
 
-## Person B — Frontend / Demo / Integration
+## Person B - Frontend / Demo / Integration
 Owns the presentation layer and demo flow.
 
 ### Main responsibilities
@@ -58,27 +57,29 @@ Owns the presentation layer and demo flow.
 
 The MVP is complete when the system can:
 
-- accept a text prompt
-- process at least one real example class
-- extract frames from source media
-- filter bad frames
+- accept a text prompt and class list
+- attempt any number of requested classes without rejecting input up front
+- decide which classes are feasible for the current run
+- ingest both structured web images and YouTube video sources
+- extract video frames with `ffmpeg`
+- filter bad or duplicate samples
 - generate bounding boxes automatically
-- package a YOLO-format dataset
-- train one YOLO model
-- show evaluation metrics
-- expose final dataset + weights in a simple demo flow
+- package a YOLO-format dataset for the feasible subset
+- optionally train one YOLO model
+- show evaluation and class-level outcome summaries
+- expose final dataset + weights + manifests in a simple demo flow
 
 ---
 
 # 2. Priority Labels
 
-## P0 — Must have
+## P0 - Must have
 Required for the demo to work at all.
 
-## P1 — Should have
+## P1 - Should have
 Important for a strong demo, but not absolutely required.
 
-## P2 — Nice to have
+## P2 - Nice to have
 Good polish or stretch goals.
 
 ---
@@ -87,6 +88,22 @@ Good polish or stretch goals.
 
 ## A. Core Pipeline Tasks
 
+### A0. Backend environment bootstrap
+**Owner:** Person A  
+**Priority:** P0  
+**Status:** Not started
+
+#### Deliverables
+- Python runtime pinned to `3.11` or `3.12`
+- dependency management for backend packages
+- `ffmpeg` installation / path validation
+- `.env.example`
+
+#### Notes
+This makes the backend reproducible before agent logic starts.
+
+---
+
 ### A1. Define folder structure and project skeleton
 **Owner:** Person A  
 **Priority:** P0  
@@ -94,8 +111,8 @@ Good polish or stretch goals.
 
 #### Deliverables
 - clean repo structure
-- folders for raw media, frames, labels, datasets, models, outputs
-- config file or constants file
+- folders for jobs, raw sources, downloads, frames, labels, datasets, models, outputs, reports
+- shared config and data contracts
 
 #### Notes
 This should happen first so the rest of the system has a clean place to write artifacts.
@@ -108,12 +125,35 @@ This should happen first so the rest of the system has a clean place to write ar
 **Status:** Not started
 
 #### Deliverables
-- input source handling
-- support for at least one reliable source path
-- saved raw media files with source metadata
+- structured web-image source adapter
+- YouTube source discovery / download path
+- source provenance metadata
+- source-type tagging
+- saved raw source records and manifests
 
 #### Notes
-For MVP, this can be simpler than the big vision. It does not need fully autonomous multi-source search on day one if that becomes risky.
+V1 should support the two-source ingestion path cleanly rather than many unreliable adapters.
+
+#### V1 now, improve later
+- broader source adapters
+- licensing filters
+- public dataset adapters
+
+---
+
+### A2b. Class Planner / dynamic class admission
+**Owner:** Person A  
+**Priority:** P0  
+**Status:** Not started
+
+#### Deliverables
+- per-class feasibility scoring
+- `ready` / `risky` / `blocked` states
+- admitted-class plan artifact
+- partial-success handling for feasible subsets
+
+#### Notes
+This replaces hard class caps as the main safety mechanism.
 
 ---
 
@@ -126,10 +166,16 @@ For MVP, this can be simpler than the big vision. It does not need fully autonom
 - extract frames from input videos
 - configurable FPS or interval
 - frame metadata log
+- timestamp-to-source mapping
 - output directory per source
 
 #### Notes
-This is one of the most important early tasks because many later stages depend on it.
+Requires local `ffmpeg` bootstrap/setup to be validated first.
+
+#### V1 now, improve later
+- scene-change extraction
+- adaptive FPS
+- source-specific extraction policies
 
 ---
 
@@ -140,12 +186,34 @@ This is one of the most important early tasks because many later stages depend o
 
 #### Deliverables
 - blur filtering
-- duplicate filtering or approximate deduplication
+- cross-source deduplication
+- source-aware quality scoring
+- object visibility / size heuristics
 - accept/reject logic
 - JSON log with rejection reasons
 
 #### Notes
 This is part of the core novelty of the project, so it needs to be visible in the demo.
+
+#### V1 now, improve later
+- embedding-based diversity scoring
+- stronger occlusion estimation
+- learned critic model
+
+---
+
+### A4b. Cross-source sample normalization
+**Owner:** Person A  
+**Priority:** P0  
+**Status:** Not started
+
+#### Deliverables
+- unify web images and video frames into one sample contract
+- preserve provenance and source type
+- preserve class hints and extraction metadata
+
+#### Notes
+This keeps downstream labeling and dataset build logic source-agnostic.
 
 ---
 
@@ -155,17 +223,24 @@ This is part of the core novelty of the project, so it needs to be visible in th
 **Status:** Not started
 
 #### Deliverables
-- accepted frame input
+- accepted sample input
+- generic label-provider interface
+- Gemini-first implementation
 - bounding box output in YOLO format
-- label file generation
-- label confidence metadata if possible
+- label confidence metadata
+- per-class labeling for admitted classes only
 
 #### Notes
-Keep the first version simple and reliable. It is better to support one class well than many classes badly.
+V1 should optimize for one provider abstraction done cleanly, not many half-integrated providers.
+
+#### V1 now, improve later
+- multi-provider backends
+- second-pass relabeling
+- human-review queue
 
 ---
 
-### A6. Label validation
+### A5b. Label validation and confidence gating
 **Owner:** Person A  
 **Priority:** P1  
 **Status:** Not started
@@ -175,9 +250,20 @@ Keep the first version simple and reliable. It is better to support one class we
 - check coordinate ranges
 - check image-label pairing
 - reject broken labels before training
+- exclude low-confidence labels when needed
 
 #### Notes
-This can save a lot of debugging time later.
+This extends the old label-validation task into a stronger gate before training.
+
+---
+
+### A6. Label validation
+**Owner:** Person A  
+**Priority:** P1  
+**Status:** Superseded by A5b
+
+#### Notes
+Folded into `A5b. Label validation and confidence gating`.
 
 ---
 
@@ -188,12 +274,37 @@ This can save a lot of debugging time later.
 
 #### Deliverables
 - YOLO folder structure
-- train / val split
-- data.yaml generation
+- train / val / test split
+- `data.yaml` generation
 - dataset manifest
+- partial-success dataset creation
+- admitted / deferred class handling
+- source-mix reporting in manifests
 
 #### Notes
 This is the artifact that proves the system returns a reusable dataset, not just a model.
+
+#### V1 now, improve later
+- smarter class balancing
+- curriculum datasets
+- augmentation presets by domain
+
+---
+
+### A7b. Run-budget and resource guardrails
+**Owner:** Person A  
+**Priority:** P0  
+**Status:** Not started
+
+#### Deliverables
+- max runtime per run
+- max downloads
+- max labeling calls
+- max accepted samples
+- graceful stop behavior
+
+#### Notes
+The user input can stay unbounded even though execution stays resource-aware.
 
 ---
 
@@ -225,7 +336,7 @@ Only add this after the base dataset path is working.
 - basic configurable hyperparameters
 
 #### Notes
-This is essential for the end-to-end story.
+Training is part of the story, but dataset quality still comes first.
 
 ---
 
@@ -238,11 +349,18 @@ This is essential for the end-to-end story.
 - mAP@50
 - precision
 - recall
-- basic results summary
+- feasible-subset evaluation
+- class-level weakness reporting
+- class-level include / defer feedback
 - evaluation report JSON
 
 #### Notes
 Even simple metrics are enough for MVP as long as they are real and visible.
+
+#### V1 now, improve later
+- confusion analysis
+- object-size breakdowns
+- source-performance attribution
 
 ---
 
@@ -253,11 +371,17 @@ Even simple metrics are enough for MVP as long as they are real and visible.
 
 #### Deliverables
 - threshold-based stop / retry logic
-- decision based on mAP or weak quality signals
+- per-class recollect / relabel decisions
+- no full rerun when only one class is weak
 - simple retry flow
 
 #### Notes
-For MVP, this can be one clean second-pass retry rather than a very advanced loop.
+For MVP, this can still be lightweight, but it must be class-aware.
+
+#### V1 now, improve later
+- targeted recollection strategies
+- automatic class re-weighting
+- label repair loops
 
 ---
 
@@ -267,13 +391,22 @@ For MVP, this can be one clean second-pass retry rather than a very advanced loo
 **Status:** Not started
 
 #### Deliverables
-- pipeline runner
+- CLI-first pipeline runner
 - stage-by-stage execution
+- Class Planner stage
+- run budgets
 - job status tracking
+- graceful partial completion
 - final artifact bundle
 
 #### Notes
-Can be CLI-first and later wrapped in an API.
+Build the core runner once, then wrap it in an API later if needed.
+
+#### V1 now, improve later
+- FastAPI wrapper
+- async jobs
+- resumable checkpoints
+- multi-run comparison UI
 
 ---
 
@@ -285,7 +418,7 @@ Can be CLI-first and later wrapped in an API.
 **Status:** Not started
 
 #### Deliverables
-- text input for prompt/class
+- text input for prompt/class list
 - submit button
 - run status view
 - final results page
@@ -307,6 +440,7 @@ The UI can be very lightweight. Clean and understandable is more important than 
 - simple loading states
 
 #### Example stages
+- class planning
 - source collection
 - frame extraction
 - filtering
@@ -357,7 +491,8 @@ This reinforces that the dataset is a real output of the system.
 - display mAP@50
 - precision
 - recall
-- optional weak-class notes
+- weak-class notes
+- admitted / deferred class outcomes
 
 #### Notes
 Keep this clean and legible.
@@ -412,16 +547,18 @@ Nice for polish, not core.
 ### C1. Decide exact MVP scope
 **Owner:** Both  
 **Priority:** P0  
-**Status:** Not started
+**Status:** Done
 
-#### Decision points
-- one class or multiple?
-- one source type or many?
-- full live training or partial precomputation?
-- UI-first or CLI-first?
+#### Locked decisions
+- CLI-first backend
+- prompt-driven class input
+- dynamic class admission
+- structured web-image ingestion + YouTube ingestion
+- accepted-set 70/30 source-mix target
+- Gemini-first label provider behind a generic interface
 
 #### Notes
-This must be locked early to avoid scope creep.
+This scope is locked unless the team explicitly reopens it.
 
 ---
 
@@ -441,16 +578,22 @@ This must be locked early to avoid scope creep.
 ### C3. Agree on artifact contracts
 **Owner:** Both  
 **Priority:** P0  
-**Status:** Not started
+**Status:** Done
 
 #### Deliverables
-- file names
-- folder paths
-- JSON schema for shared outputs
-- run status schema
+- `class_plan.json`
+- `source_manifest.json`
+- `sample_manifest.json`
+- `frame_scores.json`
+- `accepted_frames.json`
+- `labels_manifest.json`
+- `dataset_manifest.json`
+- `training_results.json`
+- `evaluation_report.json`
+- `run_summary.json`
 
 #### Notes
-This avoids integration pain between backend and frontend.
+The frontend and backend should integrate against these artifacts.
 
 ---
 
@@ -499,14 +642,20 @@ This is non-negotiable for a hackathon.
 # 4. Recommended Ownership Summary
 
 ## Person A primary
+- A0 backend bootstrap
 - A1 repo skeleton
 - A2 source ingestion
+- A2b class planning
 - A3 frame extraction
 - A4 frame critic
+- A4b sample normalization
 - A5 auto-labeling
+- A5b label validation
 - A7 dataset builder
+- A7b budget guardrails
 - A9 YOLO training
 - A10 evaluation
+- A11 iteration logic
 - A12 orchestration
 
 ## Person B primary
@@ -531,15 +680,16 @@ This is non-negotiable for a hackathon.
 
 # 5. Build Order
 
-## Phase 1 — Critical foundation
-**Goal:** make the pipeline real before making it pretty
+## Phase 1 - Critical foundation
+**Goal:** make the backend real before demo polish
 
 ### Person A
+- A0 backend bootstrap
 - A1 repo skeleton
+- A2b class planner
 - A3 frame extraction
 - A5 auto-labeling
 - A7 dataset builder
-- A9 YOLO training
 
 ### Person B
 - C3 artifact contracts with Person A
@@ -549,12 +699,13 @@ This is non-negotiable for a hackathon.
 
 ---
 
-## Phase 2 — Core novelty
+## Phase 2 - Core novelty
 **Goal:** implement what makes the project stand out
 
 ### Person A
 - A2 source ingestion
 - A4 frame critic
+- A4b sample normalization
 - A10 evaluation
 
 ### Person B
@@ -564,11 +715,13 @@ This is non-negotiable for a hackathon.
 
 ---
 
-## Phase 3 — Reliability and demo
+## Phase 3 - Reliability and demo
 **Goal:** make the project presentable and safe to show
 
 ### Person A
-- A6 label validation
+- A5b label validation
+- A7b budget guardrails
+- A9 training integration
 - A11 iteration logic
 - A12 better orchestration
 
@@ -587,12 +740,12 @@ This is non-negotiable for a hackathon.
 
 These tasks must work for the project to be demoable:
 
-1. source/media input  
-2. frame extraction  
-3. frame filtering  
-4. auto-labeling  
-5. dataset build  
-6. YOLO training  
+1. class planning  
+2. source/media input  
+3. frame extraction  
+4. frame filtering  
+5. auto-labeling  
+6. dataset build  
 7. evaluation output  
 8. basic UI or display layer
 
@@ -605,13 +758,13 @@ If any of these fail, the demo weakens significantly.
 Only do these if the MVP is already stable.
 
 ## Stretch Goal 1
-Multi-source search instead of one source path
+Live multi-provider label backends
 
 ## Stretch Goal 2
-Smarter diversity scoring
+Smarter diversity scoring and learned critic logic
 
 ## Stretch Goal 3
-Iteration loop with automatic recollection
+Automatic recollection loops with source-aware planning
 
 ## Stretch Goal 4
 Live webcam inference on final trained model
@@ -626,13 +779,13 @@ Downloadable artifact bundle from UI
 Before submission, verify:
 
 - prompt input works
+- class planning is visible
 - frame extraction works
 - accepted/rejected filtering is visible
 - labels are being generated correctly
 - dataset folder is valid
-- YOLO training completes
-- metrics display correctly
-- final weights are saved
+- evaluation outputs render correctly
+- final manifests are saved
 - dataset is shown as an output
 - backup demo exists
 
@@ -641,19 +794,19 @@ Before submission, verify:
 # 9. Risk Management
 
 ## Risk: full live training is too slow
-**Mitigation:** use smaller dataset or precomputed fallback run
+**Mitigation:** use smaller datasets, optional training, or a precomputed fallback run
 
 ## Risk: auto-labeling is noisy
-**Mitigation:** restrict to one object class and filter more aggressively
+**Mitigation:** use confidence gating, better filtering, and partial-success class admission
 
 ## Risk: frontend and backend mismatch
-**Mitigation:** define artifact contracts early
+**Mitigation:** define artifact contracts early and keep them stable
 
 ## Risk: source collection becomes messy
-**Mitigation:** support one reliable source path first
+**Mitigation:** support the approved two-source path well before adding more adapters
 
 ## Risk: iteration loop becomes too ambitious
-**Mitigation:** keep first version threshold-based and simple
+**Mitigation:** keep first version threshold-based and class-aware
 
 ---
 
@@ -662,12 +815,11 @@ Before submission, verify:
 ## Day 1
 - lock MVP
 - define contracts
-- make frame extraction + labeling + dataset structure real
+- make class planning + frame extraction + labeling + dataset structure real
 
 ## Day 2
-- get YOLO training and metrics working
+- get ingestion, critic, and evaluation working
 - build UI around actual outputs
-- implement frame critic
 
 ## Day 3
 - integrate everything
@@ -681,21 +833,28 @@ Before submission, verify:
 
 The project is done when:
 
-- a user enters a target prompt
-- the system produces filtered frames
+- a user enters a target prompt and class list
+- the system evaluates class feasibility
+- the system produces filtered frames/samples
 - labels are generated
-- a YOLO dataset is built
-- a model is trained
-- evaluation metrics are shown
-- both dataset and model are returned
+- a YOLO dataset is built for the feasible subset
+- evaluation metrics or evaluation status are shown
+- both dataset and model artifacts are returned when available
 - the team can demo the workflow clearly and reliably
 
 ---
 
 # 12. Summary
 
-For a 2-person team, the right strategy is to split the project into:
+For a 2-person team, the right strategy is still:
 - **Person A:** make the pipeline real
 - **Person B:** make the pipeline visible, understandable, and demoable
 
-The win condition is not building every advanced feature. It is delivering one clear end-to-end story: the system autonomously creates a dataset, trains a detector, evaluates it, and returns both the model and the dataset.
+The difference is that the backend scope is now clearer:
+- do not hard-cap classes
+- do not pretend every class is equally feasible
+- admit what is trainable
+- preserve provenance
+- return transparent artifacts and run decisions
+
+The win condition is one clear end-to-end story: the system accepts an open-ended detection request, plans which classes are feasible, builds a better dataset, and returns both the dataset and the model artifacts it can support.

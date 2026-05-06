@@ -1,0 +1,30 @@
+{
+  "sources": [
+    {
+      "id": "web_example_001",
+      "source_type": "web_image",
+      "class_names": ["forklift"],
+      "title": "Example forklift image",
+      "local_path": "C:/replace/me/forklift.png",
+      "url": "https://example.com/forklift.png",
+      "metadata": {
+        "blur_score": 0.9,
+        "visibility_score": 0.85,
+        "object_size_score": 0.8
+      }
+    },
+    {
+      "id": "youtube_example_001",
+      "source_type": "youtube_video",
+      "class_names": ["forklift"],
+      "title": "Example forklift video",
+      "local_path": "C:/replace/me/forklift.mp4",
+      "url": "https://youtube.com/watch?v=replace_me",
+      "metadata": {
+        "blur_score": 0.8,
+        "visibility_score": 0.8,
+        "object_size_score": 0.75
+      }
+    }
+  ]
+}
