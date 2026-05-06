@@ -30,12 +30,22 @@ def load_source_manifest(path: Path | None) -> list[SourceRecord]:
     return sources
 
 
+def has_local_asset(source: SourceRecord) -> bool:
+    return bool(source.local_path and Path(source.local_path).exists())
+
+
+def usable_sources(sources: list[SourceRecord]) -> list[SourceRecord]:
+    return [source for source in sources if has_local_asset(source)]
+
+
 def collect_web_image_sources(sources: list[SourceRecord], classes: list[str]) -> list[SourceRecord]:
     class_set = set(classes)
     return [
         source
         for source in sources
-        if source.source_type == "web_image" and class_set.intersection(source.class_names)
+        if source.source_type == "web_image"
+        and class_set.intersection(source.class_names)
+        and has_local_asset(source)
     ]
 
 
@@ -44,7 +54,9 @@ def collect_youtube_video_sources(sources: list[SourceRecord], classes: list[str
     return [
         source
         for source in sources
-        if source.source_type == "youtube_video" and class_set.intersection(source.class_names)
+        if source.source_type == "youtube_video"
+        and class_set.intersection(source.class_names)
+        and has_local_asset(source)
     ]
 
 
@@ -119,7 +131,7 @@ def normalize_sources_to_samples(web_sources: list[SourceRecord], frame_samples:
     samples: list[SampleRecord] = list(frame_samples)
 
     for source in web_sources:
-        if not source.local_path:
+        if not has_local_asset(source):
             continue
         samples.append(
             SampleRecord(

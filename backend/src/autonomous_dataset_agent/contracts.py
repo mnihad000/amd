@@ -129,6 +129,8 @@ class BootstrapReport:
     python_version: str
     ffmpeg_available: bool
     ffmpeg_path: str | None
+    yt_dlp_available: bool = False
+    yt_dlp_path: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 

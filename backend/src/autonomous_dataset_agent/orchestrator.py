@@ -12,22 +12,28 @@ from .class_planner import (
     normalize_classes,
 )
 from .config import JobConfig
-from .contracts import JobPaths, LabelRecord, RunSummary
+from .contracts import BootstrapReport, JobPaths, LabelRecord, RunSummary, SourceRecord
 from .critic import score_and_filter_samples
 from .dataset_builder import build_dataset
+from .downloaders import download_image_sources, round_robin_select
 from .evaluation import evaluate_run
 from .iteration import decide_next_step
 from .labeling import build_label_provider, validate_label_records
+from .query_generation import generate_class_queries
 from .sources import (
     collect_web_image_sources,
     collect_youtube_video_sources,
     extract_video_frames,
+    has_local_asset,
     load_source_manifest,
     normalize_sources_to_samples,
     rebalance_samples,
+    usable_sources,
 )
 from .training import train_dataset
 from .utils import ensure_dir, write_json
+from .web_search import search_web_image_candidates
+from .youtube_search import download_youtube_sources, search_youtube_candidates
 
 
 class PipelineRunner:
@@ -35,23 +41,26 @@ class PipelineRunner:
         self.config = config
 
     def run(self) -> RunSummary:
-        bootstrap = run_bootstrap_checks(self.config.source.ffmpeg_path)
+        bootstrap = run_bootstrap_checks(
+            self.config.source.ffmpeg_path,
+            self.config.source.yt_dlp_path,
+        )
         job_paths = self._build_job_paths(self.config.output_root, self.config.job_id)
         requested_classes = normalize_classes(self.config.classes)
 
         class_plan = build_initial_class_plan(self.config.prompt, requested_classes)
-        source_manifest = load_source_manifest(self.config.source.manifest_path)
-        class_plan = attach_source_counts(class_plan, source_manifest)
+        source_manifest, source_notes = self._resolve_source_manifest(
+            requested_classes,
+            job_paths,
+            bootstrap,
+        )
+        class_plan = attach_source_counts(class_plan, usable_sources(source_manifest))
 
         candidate_classes = [
             entry.name for entry in class_plan if entry.final_state in {"ready", "risky"}
         ]
         web_sources = collect_web_image_sources(source_manifest, candidate_classes)
         video_sources = collect_youtube_video_sources(source_manifest, candidate_classes)
-        total_source_budget = self.config.budgets.max_downloaded_sources
-        web_sources = web_sources[:total_source_budget]
-        remaining_budget = max(0, total_source_budget - len(web_sources))
-        video_sources = video_sources[:remaining_budget]
 
         extracted_frames, extraction_notes = extract_video_frames(
             video_sources,
@@ -121,7 +130,7 @@ class PipelineRunner:
         iteration_decision = decide_next_step(evaluation_report, class_plan)
 
         source_breakdown = Counter(sample.source_type for sample in balanced_samples)
-        notes = bootstrap.warnings + extraction_notes
+        notes = bootstrap.warnings + source_notes + extraction_notes
 
         artifacts = {
             "bootstrap": str(job_paths.reports / "bootstrap.json"),
@@ -167,6 +176,85 @@ class PipelineRunner:
         )
         write_json(Path(artifacts["run_summary"]), summary)
         return summary
+
+    def _resolve_source_manifest(
+        self,
+        requested_classes: list[str],
+        job_paths: JobPaths,
+        bootstrap: BootstrapReport,
+    ) -> tuple[list[SourceRecord], list[str]]:
+        if self.config.source.source_mode == "manifest":
+            return load_source_manifest(self.config.source.manifest_path), []
+
+        notes: list[str] = []
+        queries_by_class = generate_class_queries(self.config.prompt, requested_classes)
+        web_candidates_by_class, web_notes = search_web_image_candidates(
+            requested_classes,
+            queries_by_class,
+            self.config.source,
+        )
+        youtube_candidates_by_class, youtube_notes = search_youtube_candidates(
+            requested_classes,
+            queries_by_class,
+            self.config.source,
+            bootstrap.yt_dlp_available,
+        )
+        notes.extend(web_notes)
+        notes.extend(youtube_notes)
+
+        manifest_sources: list[SourceRecord] = []
+        selected_by_id: dict[str, SourceRecord] = {}
+        grouped_for_budget: dict[str, list[SourceRecord]] = {}
+
+        for class_name in requested_classes:
+            web_candidates = list(web_candidates_by_class.get(class_name, []))
+            youtube_candidates = list(youtube_candidates_by_class.get(class_name, []))
+
+            selected_web = web_candidates[: self.config.source.web_image_downloads_per_class]
+            selected_youtube = youtube_candidates[: self.config.source.youtube_downloads_per_class]
+            grouped_for_budget[class_name] = selected_web + selected_youtube
+
+            for source in web_candidates[self.config.source.web_image_downloads_per_class :]:
+                source.metadata["download_status"] = "skipped_candidate_limit"
+                source.metadata["download_error"] = None
+            for source in youtube_candidates[self.config.source.youtube_downloads_per_class :]:
+                source.metadata["download_status"] = "skipped_candidate_limit"
+                source.metadata["download_error"] = None
+
+            manifest_sources.extend(web_candidates)
+            manifest_sources.extend(youtube_candidates)
+
+        selected_sources = round_robin_select(
+            grouped_for_budget,
+            self.config.budgets.max_downloaded_sources,
+        )
+        for source in selected_sources:
+            selected_by_id[source.id] = source
+
+        for source in manifest_sources:
+            if source.id not in selected_by_id and "download_status" not in source.metadata:
+                source.metadata["download_status"] = "skipped_budget"
+                source.metadata["download_error"] = None
+
+        selected_web_sources = [source for source in selected_sources if source.source_type == "web_image"]
+        selected_video_sources = [
+            source for source in selected_sources if source.source_type == "youtube_video"
+        ]
+
+        _, download_notes = download_image_sources(selected_web_sources, job_paths, self.config.source)
+        notes.extend(download_notes)
+        _, youtube_download_notes = download_youtube_sources(
+            selected_video_sources,
+            job_paths,
+            self.config.source,
+            bootstrap.yt_dlp_available,
+        )
+        notes.extend(youtube_download_notes)
+
+        if not any(has_local_asset(source) for source in manifest_sources):
+            notes.append("Live discovery produced no usable local sources.")
+
+        return manifest_sources, notes
 
     @staticmethod
     def _build_job_paths(output_root: Path, job_id: str) -> JobPaths:

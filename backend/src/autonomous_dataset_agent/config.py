@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal
 from pathlib import Path
 
 from .contracts import BudgetLimits, CriticThresholds, SourceMix
@@ -36,12 +37,32 @@ def _env_float(name: str, default: float) -> float:
     return float(value) if value is not None else default
 
 
+def _env_list(name: str, default: list[str]) -> list[str]:
+    value = os.getenv(name)
+    if value is None:
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @dataclass
 class SourceConfig:
-    manifest_path: Path | None
-    ffmpeg_path: str
-    frames_per_second: float
-    max_frames_per_video: int
+    source_mode: Literal["manifest", "live"] = "manifest"
+    manifest_path: Path | None = None
+    ffmpeg_path: str = "ffmpeg"
+    yt_dlp_path: str = "yt-dlp"
+    frames_per_second: float = 0.5
+    max_frames_per_video: int = 40
+    web_search_provider_order: list[str] | None = None
+    bing_search_api_key: str | None = None
+    web_image_search_results_per_class: int = 10
+    web_image_downloads_per_class: int = 4
+    youtube_search_results_per_class: int = 6
+    youtube_downloads_per_class: int = 2
+    download_timeout_seconds: int = 20
+    download_retry_count: int = 2
+    download_user_agent: str = "AutonomousDatasetAgent/0.1"
+    source_domain_allowlist: list[str] | None = None
+    source_domain_denylist: list[str] | None = None
 
 
 @dataclass
@@ -78,6 +99,7 @@ def build_job_config(
     classes: list[str],
     output_root: str | Path | None = None,
     env_file: str | Path | None = None,
+    source_mode: str | None = None,
 ) -> JobConfig:
     if env_file:
         _load_env_file(Path(env_file))
@@ -86,6 +108,8 @@ def build_job_config(
 
     job_id = f"{slugify(prompt)}-{slugify('-'.join(classes[:3]))}"
     manifest_value = os.getenv("SOURCE_MANIFEST_PATH")
+    resolved_source_mode = (source_mode or os.getenv("SOURCE_MODE", "manifest")).strip().lower()
+    provider_order = _env_list("WEB_SEARCH_PROVIDER_ORDER", ["duckduckgo", "bing"])
     resolved_output_root = Path(output_root or os.getenv("OUTPUT_ROOT", "backend/artifacts"))
 
     return JobConfig(
@@ -94,10 +118,23 @@ def build_job_config(
         classes=classes,
         output_root=resolved_output_root,
         source=SourceConfig(
+            source_mode="live" if resolved_source_mode == "live" else "manifest",
             manifest_path=Path(manifest_value) if manifest_value else None,
             ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
+            yt_dlp_path=os.getenv("YT_DLP_PATH", "yt-dlp"),
             frames_per_second=_env_float("FRAMES_PER_SECOND", 0.5),
             max_frames_per_video=_env_int("MAX_FRAMES_PER_VIDEO", 40),
+            web_search_provider_order=provider_order,
+            bing_search_api_key=os.getenv("BING_SEARCH_API_KEY"),
+            web_image_search_results_per_class=_env_int("WEB_IMAGE_SEARCH_RESULTS_PER_CLASS", 10),
+            web_image_downloads_per_class=_env_int("WEB_IMAGE_DOWNLOADS_PER_CLASS", 4),
+            youtube_search_results_per_class=_env_int("YOUTUBE_SEARCH_RESULTS_PER_CLASS", 6),
+            youtube_downloads_per_class=_env_int("YOUTUBE_DOWNLOADS_PER_CLASS", 2),
+            download_timeout_seconds=_env_int("DOWNLOAD_TIMEOUT_SECONDS", 20),
+            download_retry_count=_env_int("DOWNLOAD_RETRY_COUNT", 2),
+            download_user_agent=os.getenv("DOWNLOAD_USER_AGENT", "AutonomousDatasetAgent/0.1"),
+            source_domain_allowlist=_env_list("SOURCE_DOMAIN_ALLOWLIST", []),
+            source_domain_denylist=_env_list("SOURCE_DOMAIN_DENYLIST", []),
         ),
         label=LabelConfig(
             provider=os.getenv("LABEL_PROVIDER", "gemini"),

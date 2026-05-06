@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Comma-separated class list, e.g. 'forklift,pallet jack'",
     )
+    run_parser.add_argument(
+        "--source-mode",
+        choices=["manifest", "live"],
+        help="Override source ingestion mode for this run",
+    )
     run_parser.add_argument("--output-root", help="Override the artifact output root")
     run_parser.add_argument("--env-file", help="Optional env file path")
 
@@ -37,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
             classes=class_list,
             output_root=args.output_root,
             env_file=args.env_file,
+            source_mode=args.source_mode,
         )
         summary = PipelineRunner(config).run()
         print(json.dumps(dataclass_to_dict(summary), indent=2))

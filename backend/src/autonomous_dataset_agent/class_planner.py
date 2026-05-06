@@ -67,7 +67,7 @@ def attach_source_counts(plan: list[ClassPlanEntry], sources: list[SourceRecord]
     for entry in plan:
         entry.discovered_sources = counts.get(entry.name, 0)
         if entry.discovered_sources == 0:
-            entry.reasons.append("No matching sources were discovered in the current manifest.")
+            entry.reasons.append("No matching usable sources were discovered for this run.")
             if entry.final_state == "ready":
                 entry.final_state = "risky"
     return plan
