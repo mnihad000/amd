@@ -8,10 +8,11 @@ Current reality:
 
 - the backend is **CLI-first**
 - there is **no FastAPI server or Swagger UI yet**
-- backend source ingestion is currently **manifest-driven**
+- backend source ingestion supports both **manifest mode** and **live mode**
 - Gemini labeling is implemented behind a provider interface
 - `mock` labeling is available for offline testing
 - `ffmpeg`-based video extraction is wired, but only works if `ffmpeg` is installed on your machine
+- `yt-dlp` powers live YouTube discovery/download when installed
 
 If an API server is added later, this document should be expanded with endpoint-by-endpoint Swagger instructions.
 
@@ -26,6 +27,8 @@ If an API server is added later, this document should be expanded with endpoint-
 - artifact generation
 - mock labeling flow
 - manifest-driven web-image ingestion
+- live web-image discovery/download
+- live YouTube discovery/download
 - optional Gemini labeling path
 - optional `ffmpeg` video-frame extraction path
 
@@ -98,9 +101,21 @@ You can copy it to `.env` and edit values if needed.
 Minimum useful settings for local backend testing:
 
 ```env
+SOURCE_MODE=manifest
 LABEL_PROVIDER=mock
 SOURCE_MANIFEST_PATH=backend/examples/source_manifest.json
 ENABLE_TRAINING=false
+```
+
+Minimum useful settings for live mode:
+
+```env
+SOURCE_MODE=live
+LABEL_PROVIDER=mock
+ENABLE_TRAINING=false
+YT_DLP_PATH=yt-dlp
+FFMPEG_PATH=ffmpeg
+WEB_SEARCH_PROVIDER_ORDER=duckduckgo,bing
 ```
 
 If you want Gemini testing:
@@ -122,6 +137,8 @@ These tests validate the current backend scaffold without needing live APIs.
 - class blocking when no usable samples exist
 - CLI pipeline orchestration with mock labeling
 - run summary artifact generation
+- live query / budget / fallback helpers
+- mocked live ingestion orchestration
 
 ### Command
 
@@ -179,6 +196,7 @@ PowerShell:
 
 ```powershell
 $env:LABEL_PROVIDER="mock"
+$env:SOURCE_MODE="manifest"
 $env:SOURCE_MANIFEST_PATH="backend/examples/source_manifest.json"
 $env:ENABLE_TRAINING="false"
 ```
@@ -260,6 +278,7 @@ Example:
 
 ```powershell
 $env:PYTHONPATH="backend/src"
+$env:SOURCE_MODE="manifest"
 $env:LABEL_PROVIDER="mock"
 $env:SOURCE_MANIFEST_PATH="backend/examples/source_manifest.json"
 python -m autonomous_dataset_agent.cli run --prompt "forklift and pallet jack in a warehouse" --classes "forklift,pallet jack"
@@ -283,6 +302,7 @@ This tests the approved “accept any class input, then decide feasibility” be
 
 ```powershell
 $env:PYTHONPATH="backend/src"
+$env:SOURCE_MODE="manifest"
 $env:LABEL_PROVIDER="mock"
 $env:SOURCE_MANIFEST_PATH="backend/examples/source_manifest.json"
 python -m autonomous_dataset_agent.cli run --prompt "forklift and pallet jack in a warehouse" --classes "forklift,pallet jack,ghost,unknown vehicle"
@@ -433,6 +453,7 @@ Example record:
 ```powershell
 $env:PYTHONPATH="backend/src"
 $env:LABEL_PROVIDER="mock"
+$env:SOURCE_MODE="manifest"
 python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift"
 ```
 
@@ -472,8 +493,74 @@ $env:ENABLE_TRAINING="true"
 ```powershell
 $env:PYTHONPATH="backend/src"
 $env:LABEL_PROVIDER="mock"
+$env:SOURCE_MODE="manifest"
 python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift"
 ```
+
+---
+
+## 12. Testing Live Source Ingestion
+
+Live mode is the new path that searches and downloads sources automatically before the existing pipeline runs.
+
+### Prerequisites
+
+Check `yt-dlp`:
+
+```powershell
+yt-dlp --version
+```
+
+Check `ffmpeg` if you want video frames:
+
+```powershell
+ffmpeg -version
+```
+
+### A. Live mode with web images only
+
+```powershell
+cd C:\Users\nihad\Desktop\amd
+$env:PYTHONPATH="backend/src"
+$env:SOURCE_MODE="live"
+$env:LABEL_PROVIDER="mock"
+$env:ENABLE_TRAINING="false"
+python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift"
+```
+
+What to verify:
+
+- `reports/source_manifest.json` contains `provider`, `query`, `domain`, and `download_status`
+- downloaded images exist under `downloads/web/`
+- `sample_manifest.json` includes `web_image` samples with local paths
+
+### B. Live mode with mixed web + YouTube
+
+```powershell
+cd C:\Users\nihad\Desktop\amd
+$env:PYTHONPATH="backend/src"
+$env:SOURCE_MODE="live"
+$env:LABEL_PROVIDER="mock"
+$env:ENABLE_TRAINING="false"
+$env:YT_DLP_PATH="yt-dlp"
+$env:FFMPEG_PATH="ffmpeg"
+python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift,pallet jack"
+```
+
+What to verify:
+
+- `reports/source_manifest.json` contains `youtube_video` entries with `video_id` and `download_status`
+- downloaded videos exist under `downloads/youtube/`
+- extracted frames exist under `frames/` when `ffmpeg` is available
+- `sample_manifest.json` includes `video_frame` samples
+
+### C. Failure-path checks
+
+Useful manual checks:
+
+- remove `yt-dlp` from PATH and verify the run continues with web-only notes
+- remove `ffmpeg` from PATH and verify video download may succeed while frame extraction is skipped
+- set a low `MAX_DOWNLOADED_SOURCES` and verify one class does not consume the full budget
 
 ### Expected behavior
 
@@ -493,7 +580,7 @@ If you did not install Ultralytics yet, training will report a blocked/skipped s
 
 ---
 
-## 12. Frontend Testing
+## 13. Frontend Testing
 
 The frontend is currently a separate Next.js app.
 
@@ -527,7 +614,7 @@ There is **no backend API integration yet**, so frontend testing is currently UI
 
 ---
 
-## 13. Swagger UI / Endpoint Testing
+## 14. Swagger UI / Endpoint Testing
 
 There is **no FastAPI server yet**, so there is currently:
 
@@ -545,31 +632,32 @@ When the API layer is added later, this section should be expanded to include:
 
 ---
 
-## 14. Suggested Manual Test Sequence
+## 15. Suggested Manual Test Sequence
 
 If you want the cleanest current test flow, do this in order:
 
 1. Run backend unit tests.
-2. Set `LABEL_PROVIDER=mock`.
+2. Test `manifest` mode with `LABEL_PROVIDER=mock`.
 3. Replace manifest placeholder paths with real local images.
-4. Run the CLI pipeline.
+4. Run the manifest-mode CLI pipeline.
 5. Inspect `run_summary.json`, `class_plan.json`, and `dataset_manifest.json`.
-6. Add a real local video file and test `ffmpeg` extraction.
-7. If you have a Gemini key, test the Gemini provider.
-8. If you install Ultralytics, test optional training.
-9. Start the frontend and verify the UI shell.
+6. Test live web-image ingestion.
+7. Test mixed live web + YouTube ingestion if `yt-dlp` and `ffmpeg` are installed.
+8. If you have a Gemini key, test the Gemini provider.
+9. If you install Ultralytics, test optional training.
+10. Start the frontend and verify the UI shell.
 
 ---
 
-## 15. Current Gaps to Be Aware Of
+## 16. Current Gaps to Be Aware Of
 
 These are not test failures. They are current implementation boundaries:
 
-- no live web search adapter yet
-- no live YouTube discovery/downloader yet
 - no FastAPI server yet
 - no Swagger UI yet
 - no full frontend-backend integration yet
+- live ingestion depends on external providers and local tools like `yt-dlp` and `ffmpeg`
+- API-backed web-search fallback only works if the corresponding credentials are configured
 
 So right now the best tests are:
 
@@ -578,10 +666,11 @@ So right now the best tests are:
 - artifact inspection
 - provider-path testing
 - local file-based sample testing
+- mocked live-ingestion testing
 
 ---
 
-## 16. Quick Command Reference
+## 17. Quick Command Reference
 
 ### Run backend unit tests
 
@@ -595,8 +684,19 @@ python -m unittest discover backend/tests
 ```powershell
 cd C:\Users\nihad\Desktop\amd
 $env:PYTHONPATH="backend/src"
+$env:SOURCE_MODE="manifest"
 $env:LABEL_PROVIDER="mock"
 $env:SOURCE_MANIFEST_PATH="backend/examples/source_manifest.json"
+python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift,pallet jack"
+```
+
+### Run backend CLI in live mode
+
+```powershell
+cd C:\Users\nihad\Desktop\amd
+$env:PYTHONPATH="backend/src"
+$env:SOURCE_MODE="live"
+$env:LABEL_PROVIDER="mock"
 python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift,pallet jack"
 ```
 
@@ -616,7 +716,7 @@ Get-ChildItem -Recurse backend\artifacts
 
 ---
 
-## 17. Future Update Rule
+## 18. Future Update Rule
 
 Whenever one of these is added, update this file immediately:
 
@@ -624,7 +724,6 @@ Whenever one of these is added, update this file immediately:
 - Swagger UI
 - new CLI commands
 - new test files
-- live source adapters
 - YouTube downloader
 - frontend-backend integration
 
