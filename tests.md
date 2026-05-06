@@ -6,15 +6,14 @@ This guide explains how to test the project **as it exists right now**.
 
 Current reality:
 
-- the backend is **CLI-first**
-- there is **no FastAPI server or Swagger UI yet**
+- the backend is **CLI-first** with a thin FastAPI wrapper
 - backend source ingestion supports both **manifest mode** and **live mode**
 - Gemini labeling is implemented behind a provider interface
 - `mock` labeling is available for offline testing
 - `ffmpeg`-based video extraction is wired, but only works if `ffmpeg` is installed on your machine
 - `yt-dlp` powers live YouTube discovery/download when installed
 
-If an API server is added later, this document should be expanded with endpoint-by-endpoint Swagger instructions.
+The API wrapper currently runs synchronously and is intended as a transport layer over the existing runner.
 
 ---
 
@@ -23,6 +22,7 @@ If an API server is added later, this document should be expanded with endpoint-
 ### Backend
 - unit tests
 - CLI pipeline execution
+- FastAPI run submission/status/artifact endpoints
 - dynamic class admission
 - artifact generation
 - mock labeling flow
@@ -37,8 +37,8 @@ If an API server is added later, this document should be expanded with endpoint-
 - visual shell / current pages
 
 ### Not available yet
-- FastAPI endpoints
-- Swagger UI
+- full async/queued API execution
+- production auth/rate limiting
 - live backend API integration with frontend
 
 ---
@@ -129,7 +129,7 @@ LABEL_API_KEY=your_real_key_here
 
 ## 4. Backend Unit Tests
 
-These tests validate the current backend scaffold without needing live APIs.
+These tests validate the current backend scaffold without needing live external providers.
 
 ### What they cover
 
@@ -616,19 +616,32 @@ There is **no backend API integration yet**, so frontend testing is currently UI
 
 ## 14. Swagger UI / Endpoint Testing
 
-There is **no FastAPI server yet**, so there is currently:
+FastAPI wrapper endpoints are available now.
 
-- no `/docs`
-- no Swagger UI
-- no REST endpoints to hit manually
+### Start API server
 
-When the API layer is added later, this section should be expanded to include:
+```powershell
+cd C:\Users\nihad\Desktop\amd\backend
+$env:PYTHONPATH="src"
+ada-api --host 127.0.0.1 --port 8000
+```
 
-- how to start the FastAPI server
-- Swagger URL
-- each endpoint
-- request body examples
-- expected success and failure responses
+### Swagger UI
+
+- `http://127.0.0.1:8000/docs`
+
+### Endpoint smoke sequence
+
+1. `POST /runs` with:
+```json
+{
+  "prompt": "forklift in a warehouse",
+  "classes": ["forklift", "pallet jack"],
+  "source_mode": "live"
+}
+```
+2. `GET /runs/{job_id}` to confirm status and summary.
+3. `GET /runs/{job_id}/artifacts` to retrieve artifact path map.
 
 ---
 
@@ -653,8 +666,6 @@ If you want the cleanest current test flow, do this in order:
 
 These are not test failures. They are current implementation boundaries:
 
-- no FastAPI server yet
-- no Swagger UI yet
 - no full frontend-backend integration yet
 - live ingestion depends on external providers and local tools like `yt-dlp` and `ffmpeg`
 - API-backed web-search fallback only works if the corresponding credentials are configured
@@ -720,11 +731,9 @@ Get-ChildItem -Recurse backend\artifacts
 
 Whenever one of these is added, update this file immediately:
 
-- FastAPI server
-- Swagger UI
 - new CLI commands
 - new test files
-- YouTube downloader
+- API execution mode changes (async queue, worker model, auth)
 - frontend-backend integration
 
 Right now this file is the authoritative testing guide for the current CLI-first MVP state.

@@ -25,6 +25,14 @@ class CriticThresholds:
     min_label_confidence: float = 0.7
     min_samples_to_label: int = 3
     min_samples_for_training: int = 5
+    min_image_width: int = 1
+    min_image_height: int = 1
+    min_sharpness_score: float = 5.0
+    min_contrast_std: float = 8.0
+    min_brightness_mean: float = 35.0
+    max_brightness_mean: float = 220.0
+    min_aspect_ratio: float = 0.2
+    max_aspect_ratio: float = 5.0
 
 
 @dataclass

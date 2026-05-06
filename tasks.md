@@ -182,7 +182,7 @@ Requires local `ffmpeg` bootstrap/setup to be validated first.
 ### A4. Frame critic / quality filtering
 **Owner:** Person A  
 **Priority:** P0  
-**Status:** Not started
+**Status:** Done (v1 lightweight hardening complete)
 
 #### Deliverables
 - blur filtering
@@ -199,6 +199,7 @@ This is part of the core novelty of the project, so it needs to be visible in th
 - embedding-based diversity scoring
 - stronger occlusion estimation
 - learned critic model
+- API-time stage metrics / critic telemetry export
 
 ---
 
@@ -388,7 +389,7 @@ For MVP, this can still be lightweight, but it must be class-aware.
 ### A12. Backend job orchestration
 **Owner:** Person A  
 **Priority:** P0  
-**Status:** Not started
+**Status:** In progress
 
 #### Deliverables
 - CLI-first pipeline runner
@@ -403,10 +404,31 @@ For MVP, this can still be lightweight, but it must be class-aware.
 Build the core runner once, then wrap it in an API later if needed.
 
 #### V1 now, improve later
-- FastAPI wrapper
+- FastAPI wrapper (thin synchronous phase completed)
 - async jobs
 - resumable checkpoints
 - multi-run comparison UI
+
+---
+
+### A12b. Post-v1 Phase 1 - Thin API layer checklist
+**Owner:** Person A  
+**Priority:** P1  
+**Status:** In progress
+
+#### Completed
+- `POST /runs` endpoint implemented
+- `GET /runs/{job_id}` endpoint implemented
+- `GET /runs/{job_id}/artifacts` endpoint implemented
+- synchronous execution path wired to existing `PipelineRunner`
+- artifact contracts reused from existing run summary
+- API dependencies and server entrypoint added (`fastapi`, `uvicorn`, `ada-api`)
+
+#### Next checklist items
+- add API integration test coverage for run success/failure and artifact fetch
+- add explicit request timeout behavior and error mapping docs
+- add lightweight run-status persistence policy for restarts
+- decide async execution handoff boundary for next iteration
 
 ---
 
@@ -600,13 +622,14 @@ The frontend and backend should integrate against these artifacts.
 ### C4. Integration testing
 **Owner:** Both  
 **Priority:** P0  
-**Status:** Not started
+**Status:** In progress
 
 #### Deliverables
 - full pipeline test
 - broken-stage handling
 - UI + backend end-to-end validation
 - proof that final artifacts render correctly
+- API endpoint smoke coverage (`POST /runs`, `GET /runs/{job_id}`, `GET /runs/{job_id}/artifacts`)
 
 ---
 

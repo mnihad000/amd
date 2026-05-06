@@ -58,6 +58,21 @@ You can override the source mode per run:
 python -m autonomous_dataset_agent.cli run --prompt "forklift in a warehouse" --classes "forklift" --source-mode live
 ```
 
+## API quick start
+
+A thin FastAPI wrapper is available for synchronous runs:
+
+```powershell
+cd backend
+ada-api --host 127.0.0.1 --port 8000
+```
+
+Endpoints:
+
+- `POST /runs`
+- `GET /runs/{job_id}`
+- `GET /runs/{job_id}/artifacts`
+
 ## Source modes
 
 ### Manifest mode
@@ -117,6 +132,14 @@ Useful env vars:
 - `YOUTUBE_SEARCH_RESULTS_PER_CLASS=6`
 - `YOUTUBE_DOWNLOADS_PER_CLASS=2`
 - `MAX_DOWNLOADED_SOURCES=50`
+- `MIN_IMAGE_WIDTH=160`
+- `MIN_IMAGE_HEIGHT=160`
+- `MIN_SHARPNESS_SCORE=5.0`
+- `MIN_CONTRAST_STD=8.0`
+- `MIN_BRIGHTNESS_MEAN=35.0`
+- `MAX_BRIGHTNESS_MEAN=220.0`
+- `MIN_ASPECT_RATIO=0.2`
+- `MAX_ASPECT_RATIO=5.0`
 
 ## Artifacts
 
