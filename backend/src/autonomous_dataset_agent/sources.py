@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 from .config import JobConfig
@@ -147,36 +148,83 @@ def normalize_sources_to_samples(web_sources: list[SourceRecord], frame_samples:
     return samples
 
 
-def rebalance_samples(samples: list[SampleRecord], mix: SourceMix, max_samples: int) -> list[SampleRecord]:
+def rebalance_samples(
+    samples: list[SampleRecord],
+    mix: SourceMix,
+    max_samples: int,
+    min_per_class: int = 0,
+) -> list[SampleRecord]:
     if not samples:
         return []
 
     ranked = sorted(samples, key=lambda item: item.quality_score or 0.0, reverse=True)
     limit = min(max_samples, len(ranked))
+    if limit <= 0:
+        return []
+
     target_web = round(limit * mix.web_target_ratio)
     target_video = limit - target_web
 
     selected: list[SampleRecord] = []
-    web_count = 0
-    video_count = 0
+    selected_ids: set[str] = set()
+    class_counts: Counter[str] = Counter()
+    sample_classes: dict[str, set[str]] = {
+        sample.id: {class_name.lower() for class_name in sample.class_names if class_name}
+        for sample in ranked
+    }
+
+    def _add_sample(sample: SampleRecord) -> None:
+        selected.append(sample)
+        selected_ids.add(sample.id)
+        for class_name in sample.class_names:
+            class_counts[class_name.lower()] += 1
+
+    if min_per_class > 0:
+        all_classes = sorted(
+            {
+                class_name.lower()
+                for sample in ranked
+                for class_name in sample.class_names
+                if class_name
+            }
+        )
+        for class_name in all_classes:
+            while class_counts[class_name] < min_per_class and len(selected) < limit:
+                candidate = next(
+                    (
+                        sample
+                        for sample in ranked
+                        if sample.id not in selected_ids
+                        and class_name in sample_classes.get(sample.id, set())
+                    ),
+                    None,
+                )
+                if candidate is None:
+                    break
+                _add_sample(candidate)
+
+    web_count = sum(1 for sample in selected if sample.source_type == "web_image")
+    video_count = len(selected) - web_count
 
     for sample in ranked:
         if len(selected) >= limit:
             break
+        if sample.id in selected_ids:
+            continue
 
         if sample.source_type == "web_image":
             if web_count < target_web or video_count >= target_video:
-                selected.append(sample)
+                _add_sample(sample)
                 web_count += 1
         else:
             if video_count < target_video or web_count >= target_web:
-                selected.append(sample)
+                _add_sample(sample)
                 video_count += 1
 
     for sample in ranked:
         if len(selected) >= limit:
             break
-        if sample not in selected:
-            selected.append(sample)
+        if sample.id not in selected_ids:
+            _add_sample(sample)
 
     return selected

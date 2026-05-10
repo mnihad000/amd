@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 backend/.python-version
 backend/artifacts/
+backend/**/artifacts/
 backend/jobs/
 backend/raw_sources/
 backend/downloads/
@@ -13,3 +14,10 @@ backend/frames/
 backend/datasets/
 backend/models/
 backend/reports/
+backend/.env
+backend/tmp_debug_run*/
+backend_test_tmp/
+tmp_debug_run*/
+**/node_modules/
+frontend/.next/
+next-app/.next/

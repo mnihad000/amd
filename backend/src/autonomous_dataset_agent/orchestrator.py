@@ -15,7 +15,7 @@ from .config import JobConfig
 from .contracts import BootstrapReport, JobPaths, LabelRecord, RunSummary, SourceRecord
 from .critic import score_and_filter_samples
 from .dataset_builder import build_dataset
-from .downloaders import download_image_sources, round_robin_select
+from .downloaders import download_image_sources, normalize_url, round_robin_select
 from .evaluation import evaluate_run
 from .iteration import decide_next_step
 from .labeling import build_label_provider, validate_label_records
@@ -194,6 +194,7 @@ class PipelineRunner:
             accepted_samples,
             self.config.mix,
             self.config.budgets.max_accepted_samples,
+            self.config.critic.min_samples_to_label,
         )
         admitted_for_labeling = determine_label_admission(
             class_plan,
@@ -336,7 +337,6 @@ class PipelineRunner:
         notes.extend(youtube_notes)
 
         manifest_sources: list[SourceRecord] = []
-        selected_by_id: dict[str, SourceRecord] = {}
         grouped_for_budget: dict[str, list[SourceRecord]] = {}
 
         for class_name in requested_classes:
@@ -361,17 +361,19 @@ class PipelineRunner:
             grouped_for_budget,
             self.config.budgets.max_downloaded_sources,
         )
-        for source in selected_sources:
-            selected_by_id[source.id] = source
+        selected_source_ids = {source.id for source in selected_sources}
+        canonical_selected_sources = self._canonicalize_selected_sources(selected_sources)
 
         for source in manifest_sources:
-            if source.id not in selected_by_id and "download_status" not in source.metadata:
+            if source.id not in selected_source_ids and "download_status" not in source.metadata:
                 source.metadata["download_status"] = "skipped_budget"
                 source.metadata["download_error"] = None
 
-        selected_web_sources = [source for source in selected_sources if source.source_type == "web_image"]
+        selected_web_sources = [
+            source for source in canonical_selected_sources if source.source_type == "web_image"
+        ]
         selected_video_sources = [
-            source for source in selected_sources if source.source_type == "youtube_video"
+            source for source in canonical_selected_sources if source.source_type == "youtube_video"
         ]
 
         _, download_notes = download_image_sources(selected_web_sources, job_paths, self.config.source)
@@ -388,6 +390,39 @@ class PipelineRunner:
             notes.append("Live discovery produced no usable local sources.")
 
         return manifest_sources, notes
+
+    @staticmethod
+    def _canonicalize_selected_sources(selected_sources: list[SourceRecord]) -> list[SourceRecord]:
+        canonical_by_key: dict[tuple[str, str], SourceRecord] = {}
+        canonical_order: list[SourceRecord] = []
+
+        for source in selected_sources:
+            raw_key = source.url or source.id
+            normalized_key = normalize_url(raw_key) if source.url else raw_key
+            key = (source.source_type, normalized_key)
+            existing = canonical_by_key.get(key)
+            if existing is None:
+                source.class_names = list(dict.fromkeys(value.lower() for value in source.class_names))
+                canonical_by_key[key] = source
+                canonical_order.append(source)
+                continue
+
+            existing.class_names = list(
+                dict.fromkeys(
+                    [
+                        *(value.lower() for value in existing.class_names),
+                        *(value.lower() for value in source.class_names),
+                    ]
+                )
+            )
+            merged_ids = set(existing.metadata.get("merged_source_ids", []))
+            merged_ids.add(source.id)
+            existing.metadata["merged_source_ids"] = sorted(merged_ids)
+            source.metadata["download_status"] = "skipped_shared_source"
+            source.metadata["download_error"] = None
+            source.metadata["canonical_source_id"] = existing.id
+
+        return canonical_order
 
     @staticmethod
     def _build_job_paths(output_root: Path, job_id: str) -> JobPaths:
