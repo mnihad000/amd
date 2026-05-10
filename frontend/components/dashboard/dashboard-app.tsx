@@ -32,7 +32,7 @@ import {
 import { cn } from "@/lib/utils"
 
 const DEFAULT_PROMPT = "forklift in a warehouse"
-const DEFAULT_CLASSES = "forklift"
+const DEFAULT_CLASSES = ["forklift"]
 
 export function DashboardApp() {
   const router = useRouter()
@@ -42,7 +42,7 @@ export function DashboardApp() {
   const [isRoutingPending, startRoutingTransition] = useTransition()
 
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT)
-  const [classesValue, setClassesValue] = useState(DEFAULT_CLASSES)
+  const [classes, setClasses] = useState<string[]>(DEFAULT_CLASSES)
   const [sourceMode, setSourceMode] = useState<SourceMode>("manifest")
   const [activeRun, setActiveRun] = useState<RunResource | null>(null)
   const [recentRuns, setRecentRuns] = useState<RunResource[]>([])
@@ -190,12 +190,9 @@ export function DashboardApp() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    const classes = classesValue
-      .split(/[\n,]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
+    const normalizedClasses = classes.map((item) => item.trim()).filter(Boolean)
 
-    if (!prompt.trim() || !classes.length) {
+    if (!prompt.trim() || !normalizedClasses.length) {
       setComposerError("A prompt and at least one class are required.")
       return
     }
@@ -207,7 +204,7 @@ export function DashboardApp() {
     try {
       const run = await createRun({
         prompt: prompt.trim(),
-        classes,
+        classes: normalizedClasses,
         source_mode: sourceMode,
       })
       setActiveRun(run)
@@ -283,12 +280,26 @@ export function DashboardApp() {
           <div className="space-y-6">
             <RunComposer
               prompt={prompt}
-              classesValue={classesValue}
+              classes={classes}
               sourceMode={sourceMode}
               submitting={submitting}
               error={composerError}
               onPromptChange={setPrompt}
-              onClassesChange={setClassesValue}
+              onClassChange={(index, value) => {
+                setClasses((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)))
+              }}
+              onAddClass={() => {
+                setClasses((current) => [...current, ""])
+              }}
+              onRemoveClass={(index) => {
+                setClasses((current) => {
+                  if (current.length === 1) {
+                    return current
+                  }
+
+                  return current.filter((_, itemIndex) => itemIndex !== index)
+                })
+              }}
               onSourceModeChange={setSourceMode}
               onSubmit={handleSubmit}
             />

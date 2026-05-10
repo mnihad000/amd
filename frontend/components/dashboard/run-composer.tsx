@@ -1,33 +1,47 @@
 "use client"
 
-import type { FormEvent } from "react"
+import type { FormEvent, KeyboardEvent } from "react"
+import { Plus, X } from "lucide-react"
 
 import type { SourceMode } from "@/lib/dashboard-api"
 import { cn } from "@/lib/utils"
 
 interface RunComposerProps {
   prompt: string
-  classesValue: string
+  classes: string[]
   sourceMode: SourceMode
   submitting: boolean
   error: string | null
   onPromptChange: (value: string) => void
-  onClassesChange: (value: string) => void
+  onClassChange: (index: number, value: string) => void
+  onAddClass: () => void
+  onRemoveClass: (index: number) => void
   onSourceModeChange: (value: SourceMode) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }
 
 export function RunComposer({
   prompt,
-  classesValue,
+  classes,
   sourceMode,
   submitting,
   error,
   onPromptChange,
-  onClassesChange,
+  onClassChange,
+  onAddClass,
+  onRemoveClass,
   onSourceModeChange,
   onSubmit,
 }: RunComposerProps) {
+  function handleClassKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter" && event.key !== ",") {
+      return
+    }
+
+    event.preventDefault()
+    onAddClass()
+  }
+
   return (
     <section className="rounded-[2rem] border border-white/10 bg-slate-950/65 p-6 shadow-[0_24px_90px_rgba(2,6,23,0.45)] backdrop-blur-xl">
       <div className="mb-6 space-y-2">
@@ -56,21 +70,56 @@ export function RunComposer({
           />
         </label>
 
-        <label className="block space-y-2">
+        <div className="space-y-2">
           <span className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-300/70">
             Classes
           </span>
-          <textarea
-            value={classesValue}
-            onChange={(event) => onClassesChange(event.target.value)}
-            placeholder="forklift, pallet jack, safety helmet"
-            rows={4}
-            className="w-full rounded-[1.4rem] border border-white/10 bg-slate-900/70 px-4 py-3 text-sm leading-6 text-white outline-none transition focus:border-cyan-300/40 focus:bg-slate-900"
-          />
+          <div className="flex flex-wrap gap-3">
+            {classes.map((className, index) => (
+              <div
+                key={`class-${index}`}
+                className="flex min-w-[220px] flex-1 items-center gap-3 rounded-[1.35rem] border border-white/10 bg-slate-900/70 px-3 py-3 transition focus-within:border-cyan-300/40 focus-within:bg-slate-900"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-cyan-300/20 bg-cyan-400/10 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-100">
+                  {index + 1}
+                </div>
+                <input
+                  value={className}
+                  onChange={(event) => onClassChange(index, event.target.value)}
+                  onKeyDown={handleClassKeyDown}
+                  placeholder={`Class ${index + 1}`}
+                  className="min-w-0 flex-1 bg-transparent text-sm leading-6 text-white outline-none placeholder:text-slate-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemoveClass(index)}
+                  disabled={classes.length === 1}
+                  className={cn(
+                    "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition",
+                    classes.length === 1
+                      ? "cursor-not-allowed border-white/8 text-slate-600"
+                      : "border-white/10 text-slate-300 hover:border-rose-300/30 hover:bg-rose-400/10 hover:text-rose-100",
+                  )}
+                  aria-label={`Remove class ${index + 1}`}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+
+            <button
+              type="button"
+              onClick={onAddClass}
+              className="inline-flex min-h-[72px] min-w-[180px] flex-1 items-center justify-center gap-2 rounded-[1.35rem] border border-dashed border-cyan-300/28 bg-cyan-400/8 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-200/40 hover:bg-cyan-400/14"
+            >
+              <Plus className="h-4 w-4" />
+              Add class
+            </button>
+          </div>
           <p className="text-xs leading-5 text-slate-400">
-            Separate classes with commas or new lines. Keep the first pass focused.
+            Each class gets its own field. Click `+` to add another target.
           </p>
-        </label>
+        </div>
 
         <div className="space-y-2">
           <span className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-300/70">
