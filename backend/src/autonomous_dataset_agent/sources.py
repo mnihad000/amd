@@ -25,6 +25,7 @@ def load_source_manifest(path: Path | None) -> list[SourceRecord]:
                 title=item.get("title", item["id"]),
                 url=item.get("url"),
                 local_path=item.get("local_path"),
+                license=item.get("license", {}) if isinstance(item.get("license"), dict) else {},
                 metadata=item.get("metadata", {}),
             )
         )

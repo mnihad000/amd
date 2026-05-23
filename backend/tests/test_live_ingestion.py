@@ -104,6 +104,13 @@ class LiveIngestionTests(unittest.TestCase):
             class_names=["forklift"],
             title="Forklift warehouse photo",
             url="https://example.com/forklift.jpg",
+            license={
+                "origin": "https://example.com/forklift.jpg",
+                "license_type": "internal_trainable",
+                "usage_rights": ["dataset_training", "model_training"],
+                "expiration": "2999-01-01",
+                "restrictions": [],
+            },
             metadata={
                 "provider": "duckduckgo",
                 "query": "forklift warehouse",
@@ -151,6 +158,13 @@ class LiveIngestionTests(unittest.TestCase):
             class_names=["forklift"],
             title="Forklift walkthrough",
             url="https://www.youtube.com/watch?v=abc123",
+            license={
+                "origin": "https://www.youtube.com/watch?v=abc123",
+                "license_type": "internal_trainable",
+                "usage_rights": ["dataset_training", "model_training"],
+                "expiration": "2999-01-01",
+                "restrictions": [],
+            },
             metadata={
                 "provider": "yt-dlp",
                 "query": "forklift warehouse",

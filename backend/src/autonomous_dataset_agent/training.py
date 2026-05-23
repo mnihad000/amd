@@ -8,7 +8,26 @@ def train_dataset(
     dataset_result: DatasetBuildResult,
     job_paths: JobPaths,
     training: TrainingConfig,
+    *,
+    review_gate: dict[str, object] | None = None,
+    quota_gate: dict[str, object] | None = None,
+    compliance_gate: dict[str, object] | None = None,
 ) -> TrainingResult:
+    if compliance_gate and compliance_gate.get("export_status") == "blocked":
+        reasons = compliance_gate.get("violations", ["License compliance gate blocked export/training."])
+        notes = []
+        for reason in reasons:
+            if isinstance(reason, dict):
+                notes.extend(str(item) for item in reason.get("reasons", []))
+            else:
+                notes.append(str(reason))
+        return TrainingResult(status="blocked", notes=notes or ["License compliance gate blocked export/training."])
+    if review_gate and review_gate.get("status") == "blocked":
+        reasons = review_gate.get("reasons", ["Pending review items block training."])
+        return TrainingResult(status="blocked", notes=[str(reason) for reason in reasons])
+    if quota_gate and quota_gate.get("status") == "blocked":
+        reasons = quota_gate.get("reasons", ["Class quota gate blocked training."])
+        return TrainingResult(status="blocked", notes=[str(reason) for reason in reasons])
     if not training.enabled:
         return TrainingResult(status="skipped", notes=["Training disabled by configuration."])
     if dataset_result.status != "completed" or not dataset_result.data_yaml_path:

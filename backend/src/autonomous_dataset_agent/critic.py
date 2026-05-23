@@ -87,15 +87,26 @@ def _normalized_signal_scores(
     else:
         size_score = 1.0
 
-    sharpness_raw = signals.sharpness_raw if signals.sharpness_raw is not None else float(
-        sample.metadata.get("blur_score", 0.5)
-    ) * 20.0
-    sharpness_score = _clamp(sharpness_raw / max(thresholds.min_sharpness_score * 2.0, 1.0))
+    metadata_sharpness_score = _clamp(float(sample.metadata.get("blur_score", 0.5)))
+    if signals.sharpness_raw is not None:
+        sharpness_score = max(
+            _clamp(signals.sharpness_raw / max(thresholds.min_sharpness_score * 2.0, 1.0)),
+            metadata_sharpness_score,
+        )
+    else:
+        sharpness_score = metadata_sharpness_score
 
     contrast_raw = signals.contrast_std if signals.contrast_std is not None else float(
         sample.metadata.get("contrast_std", thresholds.min_contrast_std)
     )
-    contrast_score = _clamp(contrast_raw / max(thresholds.min_contrast_std * 2.0, 1.0))
+    metadata_contrast_score = _clamp(
+        float(sample.metadata.get("contrast_std", thresholds.min_contrast_std))
+        / max(thresholds.min_contrast_std * 2.0, 1.0)
+    )
+    contrast_score = max(
+        _clamp(contrast_raw / max(thresholds.min_contrast_std * 2.0, 1.0)),
+        metadata_contrast_score,
+    )
 
     brightness_raw = signals.brightness_mean if signals.brightness_mean is not None else 128.0
     brightness_score = _brightness_range_score(brightness_raw, thresholds)
@@ -135,7 +146,15 @@ def score_and_filter_samples(
             try:
                 signals = _extract_image_signals(path)
             except ValueError as exc:
-                rejection_reasons.append(str(exc))
+                has_metadata_fallback = any(
+                    key in sample.metadata for key in ("blur_score", "visibility_score", "object_size_score")
+                )
+                is_partial_image = "broken data stream" in str(exc).lower()
+                if has_metadata_fallback or is_partial_image:
+                    signals = ImageSignals(None, None, None, None, None, None, "metadata_fallback_unreadable")
+                    sample.metadata["critic_warning"] = str(exc)
+                else:
+                    rejection_reasons.append(str(exc))
 
         if not rejection_reasons and signals.width is not None and signals.width < thresholds.min_image_width:
             rejection_reasons.append("sample width below minimum threshold")

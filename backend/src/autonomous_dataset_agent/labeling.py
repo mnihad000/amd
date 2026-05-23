@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib import error, request
 
 from .config import LabelConfig
-from .contracts import LabelBox, LabelRecord, SampleRecord
+from .contracts import ClassQualityConfig, LabelBox, LabelRecord, SampleRecord
 from .utils import strip_code_fences
 
 
@@ -236,3 +236,142 @@ def validate_label_records(
             invalid.append(record)
 
     return valid, invalid
+
+
+def validate_label_records_with_review(
+    label_records: list[LabelRecord],
+    admitted_classes: list[str],
+    min_confidence: float,
+    class_quality: ClassQualityConfig,
+) -> tuple[list[LabelRecord], list[LabelRecord], dict[str, object]]:
+    valid: list[LabelRecord] = []
+    invalid: list[LabelRecord] = []
+    review_items: list[dict[str, object]] = []
+    admitted_set = set(admitted_classes)
+
+    for record in label_records:
+        notes = list(record.notes)
+        validated_boxes: list[LabelBox] = []
+        review_reasons_by_box = _review_reasons_by_box(
+            record.boxes,
+            admitted_set,
+            min_confidence,
+            class_quality,
+        )
+
+        for index, box in enumerate(record.boxes):
+            if box.class_name not in admitted_set:
+                notes.append(f"Ignored box for non-admitted class '{box.class_name}'.")
+                continue
+            reasons = review_reasons_by_box.get(index, [])
+            if reasons:
+                notes.extend(f"Review required: {reason}." for reason in reasons)
+                review_items.append(
+                    {
+                        "id": f"{record.sample_id}:{index}",
+                        "sample_id": record.sample_id,
+                        "provider": record.provider,
+                        "state": "pending",
+                        "reasons": reasons,
+                        "box": {
+                            "class_name": box.class_name,
+                            "class_id": box.class_id,
+                            "x_center": box.x_center,
+                            "y_center": box.y_center,
+                            "width": box.width,
+                            "height": box.height,
+                            "confidence": box.confidence,
+                        },
+                        "notes": [],
+                    }
+                )
+                continue
+            validated_boxes.append(box)
+
+        record.boxes = validated_boxes
+        record.notes = notes
+        if validated_boxes:
+            record.status = "validated"
+            valid.append(record)
+        else:
+            record.status = "invalid"
+            invalid.append(record)
+
+    review_queue = {
+        "schema_version": 1,
+        "states": ["pending", "approved", "relabel_requested", "rejected"],
+        "items": review_items,
+    }
+    return valid, invalid, review_queue
+
+
+def _review_reasons_by_box(
+    boxes: list[LabelBox],
+    admitted_set: set[str],
+    min_confidence: float,
+    class_quality: ClassQualityConfig,
+) -> dict[int, list[str]]:
+    reasons: dict[int, list[str]] = {}
+
+    for index, box in enumerate(boxes):
+        box_reasons: list[str] = []
+        if box.class_name not in admitted_set:
+            continue
+        if box.confidence < max(min_confidence, class_quality.review_confidence_threshold):
+            box_reasons.append("low confidence")
+        if not _box_geometry_is_sufficient(box):
+            box_reasons.append("insufficient box geometry")
+        if box_reasons:
+            reasons[index] = box_reasons
+
+    for left_index, left in enumerate(boxes):
+        if left.class_name not in admitted_set:
+            continue
+        for right_index in range(left_index + 1, len(boxes)):
+            right = boxes[right_index]
+            if right.class_name not in admitted_set:
+                continue
+            iou = _box_iou(left, right)
+            if iou < class_quality.conflict_iou_threshold:
+                continue
+            reason = "cross-class conflict" if left.class_name != right.class_name else "ambiguous overlap"
+            reasons.setdefault(left_index, []).append(reason)
+            reasons.setdefault(right_index, []).append(reason)
+
+    return {
+        index: list(dict.fromkeys(box_reasons))
+        for index, box_reasons in reasons.items()
+    }
+
+
+def _box_geometry_is_sufficient(box: LabelBox) -> bool:
+    if not 0.0 <= box.x_center <= 1.0 or not 0.0 <= box.y_center <= 1.0:
+        return False
+    if not 0.0 < box.width <= 1.0 or not 0.0 < box.height <= 1.0:
+        return False
+    return box.width * box.height >= 0.0001
+
+
+def _box_edges(box: LabelBox) -> tuple[float, float, float, float]:
+    half_width = box.width / 2.0
+    half_height = box.height / 2.0
+    return (
+        max(0.0, box.x_center - half_width),
+        max(0.0, box.y_center - half_height),
+        min(1.0, box.x_center + half_width),
+        min(1.0, box.y_center + half_height),
+    )
+
+
+def _box_iou(left: LabelBox, right: LabelBox) -> float:
+    left_x1, left_y1, left_x2, left_y2 = _box_edges(left)
+    right_x1, right_y1, right_x2, right_y2 = _box_edges(right)
+    inter_width = max(0.0, min(left_x2, right_x2) - max(left_x1, right_x1))
+    inter_height = max(0.0, min(left_y2, right_y2) - max(left_y1, right_y1))
+    intersection = inter_width * inter_height
+    left_area = max(0.0, left_x2 - left_x1) * max(0.0, left_y2 - left_y1)
+    right_area = max(0.0, right_x2 - right_x1) * max(0.0, right_y2 - right_y1)
+    union = left_area + right_area - intersection
+    if union <= 0.0:
+        return 0.0
+    return intersection / union

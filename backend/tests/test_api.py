@@ -264,6 +264,53 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(file_response.status_code, 400)
         self.assertEqual(file_response.json()["error"]["code"], "invalid_request")
 
+    def test_review_endpoints_and_additive_run_detail_fields_are_stable(self) -> None:
+        review_items = [
+            {
+                "id": "sample_1:0",
+                "sample_id": "sample_1",
+                "state": "pending",
+                "reasons": ["low confidence"],
+                "box": {"class_name": "forklift", "confidence": 0.4},
+                "notes": [],
+            }
+        ]
+        app = create_app(
+            artifacts_root=self.artifacts_root,
+            index_path=self.index_path,
+            build_config_fn=self._build_config_factory(),
+            runner_factory=self._runner_factory({"job-review": {"review_items": review_items}}),
+        )
+
+        with TestClient(app) as client:
+            client.post("/runs", json={"prompt": "job-review", "classes": ["forklift"]})
+            completed = self._wait_for_status(client, "job-review", "completed")
+            self.assertIn("per_class_counts", completed["summary"])
+            self.assertIn("quota_status", completed["summary"])
+            self.assertIn("review_queue_summary", completed["summary"])
+            self.assertIn("hard_negative_summary", completed["summary"])
+
+            queue_response = client.get("/runs/job-review/review-queue")
+            self.assertEqual(queue_response.status_code, 200)
+            self.assertEqual(queue_response.json()["summary"]["pending"], 1)
+
+            decision_response = client.post(
+                "/runs/job-review/review-queue/decisions",
+                json={
+                    "decisions": [
+                        {
+                            "item_id": "sample_1:0",
+                            "decision": "approve",
+                            "reviewer": "unit-test",
+                            "notes": ["accepted for training"],
+                        }
+                    ]
+                },
+            )
+            self.assertEqual(decision_response.status_code, 200)
+            self.assertEqual(decision_response.json()["summary"]["pending"], 0)
+            self.assertEqual(decision_response.json()["items"][0]["state"], "approved")
+
     def _build_config_factory(self, *, max_runtime_seconds: int = 2):
         def build_config(
             prompt: str,
@@ -319,6 +366,18 @@ class ApiIntegrationTests(unittest.TestCase):
                     if stage_name == "finalize":
                         preview_path.parent.mkdir(parents=True, exist_ok=True)
                         preview_path.write_text("preview", encoding="utf-8")
+                        reports_dir = summary_path.parent
+                        review_items = self.behavior.get("review_items", [])
+                        review_path = reports_dir / "review_queue.json"
+                        if isinstance(review_items, list):
+                            write_json(
+                                review_path,
+                                {
+                                    "schema_version": 1,
+                                    "states": ["pending", "approved", "relabel_requested", "rejected"],
+                                    "items": review_items,
+                                },
+                            )
                         summary = RunSummary(
                             job_id=self.config.job_id,
                             prompt=self.config.prompt,
@@ -331,7 +390,12 @@ class ApiIntegrationTests(unittest.TestCase):
                             notes=[],
                             artifact_paths={
                                 "run_summary": str(summary_path),
+                                "review_queue": str(review_path),
                             },
+                            per_class_counts={"forklift": {"accepted": 1, "labeled": 1, "train": 1, "val": 1}},
+                            quota_status={"status": "passed", "per_class": {}, "reasons": []},
+                            review_queue_summary={"pending": len(review_items) if isinstance(review_items, list) else 0, "approved": 0, "relabel_requested": 0, "rejected": 0, "total": len(review_items) if isinstance(review_items, list) else 0},
+                            hard_negative_summary={"count": 0},
                         )
                         write_json(summary_path, summary)
                         self.run_context.complete_stage(stage_name)

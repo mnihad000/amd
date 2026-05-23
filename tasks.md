@@ -30,65 +30,65 @@
 - Rollout: feature flag default on, with explicit opt-out legacy mode.
 
 **Implementation checklist**
-- [ ] Add `ClassQualityConfig` with defaults and env wiring:
+- [x] Add `ClassQualityConfig` with defaults and env wiring:
   - `enabled=true`
   - `min_train_samples`, `min_val_samples`
   - `review_confidence_threshold`
   - `conflict_iou_threshold`
   - `hard_negative_top_k`
   - `opt_out_legacy_mode`
-- [ ] Add class-quality artifacts under `reports/`:
+- [x] Add class-quality artifacts under `reports/`:
   - `class_quality_report.json`
   - `review_queue.json`
   - `hard_negative_candidates.json`
   - `class_quota_gate.json`
-- [ ] Extend critic/sample selection to be class-aware:
+- [x] Extend critic/sample selection to be class-aware:
   - pass 1: satisfy per-class minimum candidate pool for labeling
   - pass 2: maximize quality while preserving minority-class coverage
   - pass 3: enforce source mix targets
-- [ ] Add per-sample diagnostics in critic outputs:
+- [x] Add per-sample diagnostics in critic outputs:
   - `class_coverage_delta`
   - `minority_boost_applied`
   - class-context rejection reason
-- [ ] Persist class distribution before/after balancing in `class_quality_report.json`.
-- [ ] Extend label validation to emit review reasons:
+- [x] Persist class distribution before/after balancing in `class_quality_report.json`.
+- [x] Extend label validation to emit review reasons:
   - low confidence
   - cross-class conflict
   - ambiguous overlap
   - insufficient box geometry
-- [ ] Route uncertain labels into `review_queue.json` with states:
+- [x] Route uncertain labels into `review_queue.json` with states:
   - `pending`, `approved`, `relabel_requested`, `rejected`
-- [ ] Enforce mandatory review completion:
+- [x] Enforce mandatory review completion:
   - block training if any required review item is still `pending`
-- [ ] Add hard-negative mining pass from prior artifacts:
+- [x] Add hard-negative mining pass from prior artifacts:
   - scan prior `labels_manifest`, `evaluation_report`, and optional predictions
   - generate class-pair confusion candidates
   - promote top-k hard negatives into next labeling candidate set
-- [ ] Add hard class quota gate before training:
+- [x] Add hard class quota gate before training:
   - require each admitted class to satisfy `min_train_samples` and `min_val_samples`
   - write structured fail/pass reasons to `class_quota_gate.json`
-- [ ] Update run summary/class states with explicit quota-gate and review-gate outcomes.
-- [ ] Add additive API fields for run details:
+- [x] Update run summary/class states with explicit quota-gate and review-gate outcomes.
+- [x] Add additive API fields for run details:
   - per-class accepted/labeled/train/val counts
   - quota status per class
   - review queue summary counts
   - hard-negative mining summary
-- [ ] Add API endpoints for review operations:
+- [x] Add API endpoints for review operations:
   - fetch review queue by run
   - submit review decisions (`approve`, `relabel_requested`, `reject`)
-- [ ] Keep existing API contract backward-compatible (additive only).
+- [x] Keep existing API contract backward-compatible (additive only).
 
 **Validation checklist (section 1)**
-- [ ] Unit: class-aware sampler preserves minority classes under mixed quality.
-- [ ] Unit: quota gate blocks training when any class misses minimum split counts.
-- [ ] Unit: label validator routes low-confidence/conflict samples into review queue.
-- [ ] Unit: hard-negative miner returns deterministic top-k candidates.
-- [ ] Integration: multi-class imbalance run is blocked until quota gate passes.
-- [ ] Integration: pending review items block training.
-- [ ] Integration: resolved review decisions unblock training when quotas pass.
-- [ ] Integration: API review endpoints and additive run detail fields are stable.
-- [ ] Regression: legacy behavior preserved when opt-out legacy mode is enabled.
-- [ ] Regression: single-class baseline runs still succeed.
+- [x] Unit: class-aware sampler preserves minority classes under mixed quality.
+- [x] Unit: quota gate blocks training when any class misses minimum split counts.
+- [x] Unit: label validator routes low-confidence/conflict samples into review queue.
+- [x] Unit: hard-negative miner returns deterministic top-k candidates.
+- [x] Integration: multi-class imbalance run is blocked until quota gate passes.
+- [x] Integration: pending review items block training.
+- [x] Integration: resolved review decisions unblock training when quotas pass.
+- [x] Integration: API review endpoints and additive run detail fields are stable.
+- [x] Regression: legacy behavior preserved when opt-out legacy mode is enabled.
+- [x] Regression: single-class baseline runs still succeed.
 
 ### 2. Iteration Intelligence and Decision Policy
 
@@ -102,59 +102,59 @@
 - Threshold policy: configurable thresholds with sensible defaults (not hardcoded constants).
 
 **Implementation checklist**
-- [ ] Add `IterationPolicyConfig` with env/config wiring:
+- [x] Add `IterationPolicyConfig` with env/config wiring:
   - per-class AP/precision/recall minimums
   - acceptable per-class delta vs baseline
   - minimum gain threshold for `promote`
   - max iteration count, max runtime, max label calls
-- [ ] Extend run input/config to accept optional `critical_classes`.
-- [ ] Add fallback rule: if `critical_classes` absent, use all requested/admitted classes as critical.
-- [ ] Replace current iteration heuristic with deterministic rule-priority engine.
-- [ ] Implement deterministic failure-mode-to-action mapping:
+- [x] Extend run input/config to accept optional `critical_classes`.
+- [x] Add fallback rule: if `critical_classes` absent, use all requested/admitted classes as critical.
+- [x] Replace current iteration heuristic with deterministic rule-priority engine.
+- [x] Implement deterministic failure-mode-to-action mapping:
   - low AP -> targeted `re-ingest` or `rebalance`
   - precision drift -> `relabel`/`re-critic`
   - recall drift or sample scarcity -> `re-ingest`/`retrain`
   - quality recovered with gains -> `promote`
-- [ ] Enforce fixed rule ordering so identical inputs always produce identical output.
-- [ ] Add baseline loader for last promoted model metrics for matching project/class context.
-- [ ] Compute per-class deltas vs baseline and persist comparison.
-- [ ] Implement promotion guard:
+- [x] Enforce fixed rule ordering so identical inputs always produce identical output.
+- [x] Add baseline loader for last promoted model metrics for matching project/class context.
+- [x] Compute per-class deltas vs baseline and persist comparison.
+- [x] Implement promotion guard:
   - block `promote` when any critical class exceeds negative delta tolerance
   - keep non-critical regressions as warnings only
-- [ ] Implement budget hard-stop checks:
+- [x] Implement budget hard-stop checks:
   - runtime cap
   - iteration cap
   - label-call cap
-- [ ] Add degrade policy near budget limits:
+- [x] Add degrade policy near budget limits:
   - prefer cheaper next action (`relabel`/`rebalance`) before costly paths (`re-ingest`/`retrain`) when valid
-- [ ] Emit `stop` with structured budget-exhaustion reasons when no compliant action remains.
-- [ ] Add section 2 artifacts:
+- [x] Emit `stop` with structured budget-exhaustion reasons when no compliant action remains.
+- [x] Add section 2 artifacts:
   - `iteration_policy_report.json`
   - `baseline_comparison.json`
   - `promotion_guard.json`
-- [ ] Extend run summary with additive iteration-policy fields:
+- [x] Extend run summary with additive iteration-policy fields:
   - selected action
   - target classes
   - policy reasons
   - budget snapshot
   - regression gate status
-- [ ] Extend API run detail payload with additive objects:
+- [x] Extend API run detail payload with additive objects:
   - `iteration_policy`
   - baseline comparison summary
   - critical-class regression gate summary
-- [ ] Preserve backward compatibility for old runs and old API consumers.
+- [x] Preserve backward compatibility for old runs and old API consumers.
 
 **Validation checklist (section 2)**
-- [ ] Unit: deterministic ordering returns same action for same inputs.
-- [ ] Unit: failure-mode mapping selects expected action per scenario.
-- [ ] Unit: critical-class regression blocks `promote`.
-- [ ] Unit: non-critical regression does not block `promote` and emits warnings.
-- [ ] Unit: budget cap exceedance forces `stop`.
-- [ ] Integration: weak per-class AP triggers targeted action (not generic recollect).
-- [ ] Integration: critical-class baseline regression blocks promotion.
-- [ ] Integration: exhausted label-call budget stops with explicit policy reason.
-- [ ] Integration: no baseline history degrades gracefully and still writes artifacts.
-- [ ] Regression: older runs without new policy fields remain readable via API.
+- [x] Unit: deterministic ordering returns same action for same inputs.
+- [x] Unit: failure-mode mapping selects expected action per scenario.
+- [x] Unit: critical-class regression blocks `promote`.
+- [x] Unit: non-critical regression does not block `promote` and emits warnings.
+- [x] Unit: budget cap exceedance forces `stop`.
+- [x] Integration: weak per-class AP triggers targeted action (not generic recollect).
+- [x] Integration: critical-class baseline regression blocks promotion.
+- [x] Integration: exhausted label-call budget stops with explicit policy reason.
+- [x] Integration: no baseline history degrades gracefully and still writes artifacts.
+- [x] Regression: older runs without new policy fields remain readable via API.
 
 ### 3. Data Governance and Provenance
 
@@ -164,24 +164,24 @@
 - Policy is hard-enforced: license or provenance violations block run progression and export.
 
 **Implementation checklist**
-- [ ] Add immutable lineage artifacts linking:
+- [x] Add immutable lineage artifacts linking:
   - source -> frame -> accepted sample -> label -> split -> dataset version -> model version -> promotion decision
-- [ ] Add deterministic dataset/model version IDs using manifest checksums.
-- [ ] Add source license metadata schema (origin, license type, usage rights, expiration, restrictions).
-- [ ] Enforce ingestion-time license validation with explicit allow/deny outcomes.
-- [ ] Enforce export-time license/compliance validation with blocking on violations.
-- [ ] Add actor-level audit trail events for:
+- [x] Add deterministic dataset/model version IDs using manifest checksums.
+- [x] Add source license metadata schema (origin, license type, usage rights, expiration, restrictions).
+- [x] Enforce ingestion-time license validation with explicit allow/deny outcomes.
+- [x] Enforce export-time license/compliance validation with blocking on violations.
+- [x] Add actor-level audit trail events for:
   - automated decisions (search/ranking/critic/labeling/iteration/promotion)
   - human actions (review, approval, reject, relabel, override)
-- [ ] Add retention/deletion policy controls and artifact lifecycle status tracking.
-- [ ] Expose additive governance/provenance summary in run outputs and API detail payload.
+- [x] Add retention/deletion policy controls and artifact lifecycle status tracking.
+- [x] Expose additive governance/provenance summary in run outputs and API detail payload.
 
 **Validation checklist (section 3)**
-- [ ] Unit: lineage chain is complete and deterministic for identical inputs.
-- [ ] Unit: checksum/version IDs are reproducible and immutable post-finalization.
-- [ ] Unit: license policy blocks disallowed source ingestion/export.
-- [ ] Integration: audit trail captures automated + human actions with actor/context.
-- [ ] Regression: legacy runs without governance fields remain readable via API.
+- [x] Unit: lineage chain is complete and deterministic for identical inputs.
+- [x] Unit: checksum/version IDs are reproducible and immutable post-finalization.
+- [x] Unit: license policy blocks disallowed source ingestion/export.
+- [x] Integration: audit trail captures automated + human actions with actor/context.
+- [x] Regression: legacy runs without governance fields remain readable via API.
 
 ### 4. Training and Evaluation Hardening
 

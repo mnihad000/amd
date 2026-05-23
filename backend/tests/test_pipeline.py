@@ -11,9 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from autonomous_dataset_agent.class_planner import build_initial_class_plan, finalize_class_plan
 from autonomous_dataset_agent.config import JobConfig, LabelConfig, SourceConfig, TrainingConfig
-from autonomous_dataset_agent.contracts import BudgetLimits, CriticThresholds, LabelBox, LabelRecord, SampleRecord, SourceMix
+from autonomous_dataset_agent.contracts import BudgetLimits, ClassQualityConfig, CriticThresholds, LabelBox, LabelRecord, SampleRecord, SourceMix
 from autonomous_dataset_agent.orchestrator import PipelineRunner
 from autonomous_dataset_agent.run_lifecycle import PIPELINE_STAGES, PipelineRunContext
+from autonomous_dataset_agent.utils import read_json
 
 
 PNG_BYTES = base64.b64decode(
@@ -91,6 +92,7 @@ class PipelineTests(unittest.TestCase):
                         "class_names": ["forklift"],
                         "title": "forklift a",
                         "local_path": str(image_paths[0]),
+                        "license": self._valid_license("forklift_a"),
                         "metadata": {"blur_score": 0.9, "visibility_score": 0.85, "object_size_score": 0.8},
                     },
                     {
@@ -99,6 +101,7 @@ class PipelineTests(unittest.TestCase):
                         "class_names": ["forklift"],
                         "title": "forklift b",
                         "local_path": str(image_paths[1]),
+                        "license": self._valid_license("forklift_b"),
                         "metadata": {"blur_score": 0.9, "visibility_score": 0.85, "object_size_score": 0.8},
                     },
                     {
@@ -107,6 +110,7 @@ class PipelineTests(unittest.TestCase):
                         "class_names": ["pallet jack"],
                         "title": "pallet a",
                         "local_path": str(image_paths[2]),
+                        "license": self._valid_license("pallet_a"),
                         "metadata": {"blur_score": 0.88, "visibility_score": 0.82, "object_size_score": 0.78},
                     },
                     {
@@ -115,6 +119,7 @@ class PipelineTests(unittest.TestCase):
                         "class_names": ["pallet jack"],
                         "title": "pallet b",
                         "local_path": str(image_paths[3]),
+                        "license": self._valid_license("pallet_b"),
                         "metadata": {"blur_score": 0.88, "visibility_score": 0.82, "object_size_score": 0.78},
                     },
                 ]
@@ -160,6 +165,195 @@ class PipelineTests(unittest.TestCase):
         finally:
             if root.exists():
                 shutil.rmtree(root)
+
+    def test_integration_multi_class_imbalance_run_is_blocked_by_quota_gate(self) -> None:
+        root = Path("backend_test_quota_tmp")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            manifest_path = self._write_manifest_with_images(
+                root,
+                [
+                    ("forklift_a", ["forklift"], 0.95),
+                    ("forklift_b", ["forklift"], 0.95),
+                    ("forklift_c", ["forklift"], 0.95),
+                    ("pallet_a", ["pallet jack"], 0.95),
+                ],
+            )
+            config = self._job_config(
+                root,
+                manifest_path,
+                ["forklift", "pallet jack"],
+                ClassQualityConfig(min_train_samples=2, min_val_samples=1),
+            )
+
+            summary = PipelineRunner(config).run()
+            quota_gate = read_json(Path(summary.artifact_paths["class_quota_gate"]))
+            training_results = read_json(Path(summary.artifact_paths["training_results"]))
+
+            self.assertEqual(quota_gate["status"], "blocked")
+            self.assertEqual(quota_gate["per_class"]["pallet jack"]["status"], "blocked")
+            self.assertEqual(training_results["status"], "blocked")
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+
+    def test_integration_pending_review_items_block_training(self) -> None:
+        root = Path("backend_test_review_tmp")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            manifest_path = self._write_manifest_with_images(
+                root,
+                [
+                    ("forklift_a", ["forklift"], 0.2),
+                    ("forklift_b", ["forklift"], 0.2),
+                ],
+            )
+            config = self._job_config(
+                root,
+                manifest_path,
+                ["forklift"],
+                ClassQualityConfig(min_train_samples=1, min_val_samples=0, review_confidence_threshold=0.8),
+            )
+
+            summary = PipelineRunner(config).run()
+            review_queue = read_json(Path(summary.artifact_paths["review_queue"]))
+            training_results = read_json(Path(summary.artifact_paths["training_results"]))
+
+            self.assertEqual(len(review_queue["items"]), 2)
+            self.assertTrue(all(item["state"] == "pending" for item in review_queue["items"]))
+            self.assertEqual(training_results["status"], "blocked")
+            self.assertIn("review item", " ".join(training_results["notes"]))
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+
+    def test_regression_legacy_mode_preserves_training_skip_behavior(self) -> None:
+        root = Path("backend_test_legacy_tmp")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            manifest_path = self._write_manifest_with_images(
+                root,
+                [("forklift_a", ["forklift"], 0.2)],
+            )
+            config = self._job_config(
+                root,
+                manifest_path,
+                ["forklift"],
+                ClassQualityConfig(enabled=True, opt_out_legacy_mode=True),
+            )
+
+            summary = PipelineRunner(config).run()
+            training_results = read_json(Path(summary.artifact_paths["training_results"]))
+            class_quality_report = read_json(Path(summary.artifact_paths["class_quality_report"]))
+
+            self.assertEqual(training_results["status"], "skipped")
+            self.assertFalse(class_quality_report["enabled"])
+            self.assertTrue(class_quality_report["legacy_mode"])
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+
+    def test_regression_single_class_baseline_run_still_succeeds(self) -> None:
+        root = Path("backend_test_single_tmp")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            manifest_path = self._write_manifest_with_images(
+                root,
+                [
+                    ("forklift_a", ["forklift"], 0.95),
+                    ("forklift_b", ["forklift"], 0.95),
+                    ("forklift_c", ["forklift"], 0.95),
+                ],
+            )
+            config = self._job_config(
+                root,
+                manifest_path,
+                ["forklift"],
+                ClassQualityConfig(min_train_samples=1, min_val_samples=1),
+            )
+
+            summary = PipelineRunner(config).run()
+            self.assertIn("forklift", summary.admitted_classes)
+            self.assertEqual(summary.quota_status["status"], "passed")
+            self.assertEqual(summary.review_queue_summary["pending"], 0)
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+
+    def _write_manifest_with_images(
+        self,
+        root: Path,
+        rows: list[tuple[str, list[str], float]],
+    ) -> Path:
+        image_dir = root / "images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        sources = []
+        for source_id, class_names, confidence in rows:
+            image_path = image_dir / f"{source_id}.png"
+            image_path.write_bytes(PNG_BYTES + source_id.encode("utf-8"))
+            sources.append(
+                {
+                    "id": source_id,
+                    "source_type": "web_image",
+                    "class_names": class_names,
+                    "title": source_id,
+                    "local_path": str(image_path),
+                    "license": self._valid_license(source_id),
+                    "metadata": {
+                        "blur_score": 0.9,
+                        "visibility_score": 0.9,
+                        "object_size_score": 0.9,
+                        "mock_confidence": confidence,
+                    },
+                }
+            )
+        manifest_path = root / "source_manifest.json"
+        manifest_path.write_text(json.dumps({"sources": sources}), encoding="utf-8")
+        return manifest_path
+
+    @staticmethod
+    def _valid_license(source_id: str) -> dict[str, object]:
+        return {
+            "origin": f"unit-test:{source_id}",
+            "license_type": "internal_trainable",
+            "usage_rights": ["dataset_training", "model_training"],
+            "expiration": "2999-01-01",
+            "restrictions": [],
+        }
+
+    def _job_config(
+        self,
+        root: Path,
+        manifest_path: Path,
+        classes: list[str],
+        class_quality: ClassQualityConfig,
+    ) -> JobConfig:
+        return JobConfig(
+            job_id="test-run",
+            prompt="forklift and pallet jack in a warehouse",
+            classes=classes,
+            output_root=root / "artifacts",
+            source=SourceConfig(manifest_path=manifest_path),
+            label=LabelConfig(provider="mock", api_key=None, gemini_model="gemini-2.0-flash"),
+            training=TrainingConfig(enabled=False, model="yolov8n.pt", epochs=1, image_size=640),
+            budgets=BudgetLimits(max_label_calls=20, max_accepted_samples=10),
+            critic=CriticThresholds(
+                min_quality_score=0.5,
+                min_label_confidence=0.7,
+                min_samples_to_label=1,
+                min_samples_for_training=1,
+            ),
+            mix=SourceMix(web_target_ratio=1.0, video_target_ratio=0.0),
+            class_quality=class_quality,
+        )
 
 
 if __name__ == "__main__":

@@ -51,6 +51,14 @@ class RunResource(BaseModel):
     updated_at: str
     error: RunError | None = None
     summary: dict[str, Any] | None = None
+    iteration_policy: dict[str, Any] | None = None
+    baseline_comparison: dict[str, Any] | None = None
+    promotion_guard: dict[str, Any] | None = None
+    governance_summary: dict[str, Any] | None = None
+    lineage_summary: dict[str, Any] | None = None
+    license_compliance: dict[str, Any] | None = None
+    version_summary: dict[str, Any] | None = None
+    artifact_lifecycle: dict[str, Any] | None = None
     stage_history: list[StageRecord] = Field(default_factory=list)
     progress: RunProgress
 
@@ -322,6 +330,19 @@ class RunStore:
                 return None
             return record.model_copy(deep=True)
 
+    def update_summary(self, job_id: str, summary: dict[str, Any]) -> RunResource | None:
+        with self._lock:
+            record = self._records.get(job_id)
+            if record is None:
+                return None
+            record.summary = summary
+            summary_path = summary.get("artifact_paths", {}).get("run_summary")
+            if summary_path:
+                record.summary_path = str(summary_path)
+            record.updated_at = _utc_now_iso()
+            self._save_locked()
+            return self._to_resource_locked(record)
+
     def list_resources(self, limit: int) -> list[RunResource]:
         with self._lock:
             ordered = sorted(
@@ -508,6 +529,14 @@ class RunStore:
             updated_at=record.updated_at,
             error=record.error.model_copy(deep=True) if record.error is not None else None,
             summary=summary,
+            iteration_policy=summary.get("iteration_policy") if isinstance(summary, dict) else None,
+            baseline_comparison=summary.get("baseline_comparison_summary") if isinstance(summary, dict) else None,
+            promotion_guard=summary.get("promotion_guard_summary") if isinstance(summary, dict) else None,
+            governance_summary=summary.get("governance_summary") if isinstance(summary, dict) else None,
+            lineage_summary=summary.get("lineage_summary") if isinstance(summary, dict) else None,
+            license_compliance=summary.get("license_compliance") if isinstance(summary, dict) else None,
+            version_summary=summary.get("version_summary") if isinstance(summary, dict) else None,
+            artifact_lifecycle=summary.get("artifact_lifecycle") if isinstance(summary, dict) else None,
             stage_history=stage_history,
             progress=RunProgress(
                 total_stages=total_stages,

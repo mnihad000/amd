@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--output-root", help="Override the artifact output root")
     run_parser.add_argument("--env-file", help="Optional env file path")
+    run_parser.add_argument("--critical-classes", help="Comma-separated classes that block promotion on regression")
 
     return parser
 
@@ -44,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
             env_file=args.env_file,
             source_mode=args.source_mode,
         )
+        if args.critical_classes:
+            config.iteration_policy.critical_classes = [
+                item.strip().lower() for item in args.critical_classes.split(",") if item.strip()
+            ]
         summary = PipelineRunner(config).run()
         print(json.dumps(dataclass_to_dict(summary), indent=2))
         return 0

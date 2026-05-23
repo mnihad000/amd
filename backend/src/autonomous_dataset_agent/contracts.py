@@ -36,6 +36,49 @@ class CriticThresholds:
 
 
 @dataclass
+class ClassQualityConfig:
+    enabled: bool = True
+    min_train_samples: int = 1
+    min_val_samples: int = 1
+    review_confidence_threshold: float = 0.75
+    conflict_iou_threshold: float = 0.5
+    hard_negative_top_k: int = 10
+    opt_out_legacy_mode: bool = False
+
+
+@dataclass
+class IterationPolicyConfig:
+    min_ap: float = 0.75
+    min_precision: float = 0.7
+    min_recall: float = 0.7
+    max_negative_ap_delta: float = 0.05
+    max_negative_precision_delta: float = 0.05
+    max_negative_recall_delta: float = 0.05
+    min_promote_map50_gain: float = 0.01
+    max_iterations: int = 3
+    max_runtime_seconds: int = 1800
+    max_label_calls: int = 200
+    current_iteration: int = 1
+    critical_classes: list[str] = field(default_factory=list)
+    per_class_minimums: dict[str, dict[str, float]] = field(default_factory=dict)
+    per_class_delta_tolerances: dict[str, dict[str, float]] = field(default_factory=dict)
+
+
+@dataclass
+class GovernanceConfig:
+    enabled: bool = True
+    require_license_metadata: bool = True
+    require_provenance: bool = True
+    block_ingestion_on_violation: bool = True
+    block_export_on_violation: bool = True
+    allowed_usage_rights: list[str] = field(
+        default_factory=lambda: ["dataset_training", "model_training", "training"]
+    )
+    retention_policy: str = "retain_until_reviewed"
+    lifecycle_status: str = "active"
+
+
+@dataclass
 class SourceRecord:
     id: str
     source_type: str
@@ -43,6 +86,7 @@ class SourceRecord:
     title: str
     url: str | None = None
     local_path: str | None = None
+    license: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -102,6 +146,7 @@ class DatasetBuildResult:
     data_yaml_path: str | None = None
     class_map: dict[int, str] = field(default_factory=dict)
     split_counts: dict[str, int] = field(default_factory=dict)
+    class_split_counts: dict[str, dict[str, int]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
 
@@ -121,6 +166,7 @@ class EvaluationReport:
     recall: float | None = None
     weak_classes: list[str] = field(default_factory=list)
     class_outcomes: dict[str, str] = field(default_factory=dict)
+    per_class_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
 
@@ -129,6 +175,12 @@ class IterationDecision:
     action: str
     target_classes: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    budget_snapshot: dict[str, object] = field(default_factory=dict)
+    regression_gate_status: str = "not_evaluated"
+    policy_report: dict[str, object] = field(default_factory=dict)
+    baseline_comparison: dict[str, object] = field(default_factory=dict)
+    promotion_guard: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -165,3 +217,15 @@ class RunSummary:
     budgets: dict[str, int]
     notes: list[str] = field(default_factory=list)
     artifact_paths: dict[str, str] = field(default_factory=dict)
+    per_class_counts: dict[str, dict[str, int]] = field(default_factory=dict)
+    quota_status: dict[str, object] = field(default_factory=dict)
+    review_queue_summary: dict[str, int] = field(default_factory=dict)
+    hard_negative_summary: dict[str, object] = field(default_factory=dict)
+    iteration_policy: dict[str, object] = field(default_factory=dict)
+    baseline_comparison_summary: dict[str, object] = field(default_factory=dict)
+    promotion_guard_summary: dict[str, object] = field(default_factory=dict)
+    governance_summary: dict[str, object] = field(default_factory=dict)
+    lineage_summary: dict[str, object] = field(default_factory=dict)
+    license_compliance: dict[str, object] = field(default_factory=dict)
+    version_summary: dict[str, object] = field(default_factory=dict)
+    artifact_lifecycle: dict[str, object] = field(default_factory=dict)

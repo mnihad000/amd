@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -11,14 +12,34 @@ from .class_planner import (
     finalize_class_plan,
     normalize_classes,
 )
+from .class_quality import (
+    build_class_quota_gate,
+    build_per_class_counts,
+    mine_hard_negative_candidates,
+    promote_hard_negative_samples,
+    review_gate,
+    review_queue_summary,
+    select_class_aware_samples,
+    update_frame_score_diagnostics,
+)
 from .config import JobConfig
 from .contracts import BootstrapReport, JobPaths, LabelRecord, RunSummary, SourceRecord
 from .critic import score_and_filter_samples
 from .dataset_builder import build_dataset
 from .downloaders import download_image_sources, normalize_url, round_robin_select
 from .evaluation import evaluate_run
+from .governance import (
+    allowed_sources_for_ingestion,
+    build_artifact_lifecycle,
+    build_audit_log,
+    build_lineage_manifest,
+    build_version_manifest,
+    governance_summary,
+    validate_source_licenses,
+)
 from .iteration import decide_next_step
-from .labeling import build_label_provider, validate_label_records
+from .iteration_policy import BudgetState, load_last_promoted_baseline
+from .labeling import build_label_provider, validate_label_records, validate_label_records_with_review
 from .query_generation import generate_class_queries
 from .sources import (
     collect_web_image_sources,
@@ -46,6 +67,7 @@ class PipelineRunner:
         self._run_context = run_context
 
     def run(self) -> RunSummary:
+        started_at_monotonic = time.monotonic()
         bootstrap, job_paths = self._run_stage(
             "bootstrap",
             lambda: (
@@ -60,7 +82,7 @@ class PipelineRunner:
             "class_planning",
             lambda: self._plan_classes(),
         )
-        source_manifest, source_notes, web_sources, video_sources, class_plan = self._run_stage(
+        source_manifest, source_notes, web_sources, video_sources, class_plan, license_report = self._run_stage(
             "source_resolution",
             lambda: self._resolve_sources(job_paths, bootstrap, requested_classes, class_plan),
         )
@@ -68,11 +90,11 @@ class PipelineRunner:
             "frame_extraction",
             lambda: self._extract_samples(video_sources, web_sources, job_paths, bootstrap),
         )
-        balanced_samples, frame_scores, class_plan, admitted_for_labeling = self._run_stage(
+        balanced_samples, frame_scores, class_plan, admitted_for_labeling, class_quality_report, hard_negative_report = self._run_stage(
             "critic",
-            lambda: self._critic_stage(all_samples, class_plan),
+            lambda: self._critic_stage(all_samples, class_plan, job_paths),
         )
-        label_records, validation_errors, class_plan, extraction_notes = self._label_stage(
+        label_records, validation_errors, review_queue, class_plan, extraction_notes, label_calls_used = self._label_stage(
             class_plan,
             balanced_samples,
             admitted_for_labeling,
@@ -95,17 +117,57 @@ class PipelineRunner:
                 admitted_for_training,
             ),
         )
+        review_gate_result = review_gate(review_queue) if self._class_quality_enabled() else {"status": "passed", "pending_count": 0, "reasons": []}
+        quota_gate = (
+            build_class_quota_gate(dataset_result, admitted_for_training, self.config.class_quality)
+            if self._class_quality_enabled()
+            else {"status": "passed", "per_class": {}, "reasons": []}
+        )
+        if self.config.training.enabled and quota_gate.get("status") == "blocked":
+            blocked_by_quota = set(quota_gate.get("per_class", {}))
+            for entry in class_plan:
+                if entry.name in blocked_by_quota and quota_gate["per_class"][entry.name]["status"] == "blocked":
+                    entry.final_state = "blocked"
+                    entry.reasons.extend(quota_gate["per_class"][entry.name]["reasons"])
+
         training_result = self._run_stage(
             "training",
-            lambda: train_dataset(dataset_result, job_paths, self.config.training),
+            lambda: train_dataset(
+                dataset_result,
+                job_paths,
+                self.config.training,
+                review_gate=review_gate_result,
+                quota_gate=quota_gate,
+                compliance_gate=license_report,
+            ),
         )
         evaluation_report = self._run_stage(
             "evaluation",
             lambda: evaluate_run(training_result, class_plan),
         )
+        policy_target_classes = admitted_for_training or requested_classes
+        promoted_baseline = load_last_promoted_baseline(
+            self.config.output_root,
+            current_job_id=self.config.job_id,
+            target_classes=policy_target_classes,
+        )
         iteration_decision = self._run_stage(
             "iteration",
-            lambda: decide_next_step(evaluation_report, class_plan),
+            lambda: decide_next_step(
+                evaluation_report,
+                class_plan,
+                self.config.iteration_policy,
+                budget_state=BudgetState(
+                    current_iteration=self.config.iteration_policy.current_iteration,
+                    elapsed_runtime_seconds=time.monotonic() - started_at_monotonic,
+                    label_calls_used=label_calls_used,
+                    max_iterations=self.config.iteration_policy.max_iterations,
+                    max_runtime_seconds=self.config.iteration_policy.max_runtime_seconds,
+                    max_label_calls=self.config.iteration_policy.max_label_calls,
+                ),
+                target_classes=policy_target_classes,
+                baseline=promoted_baseline,
+            ),
         )
 
         source_breakdown = Counter(sample.source_type for sample in balanced_samples)
@@ -124,6 +186,12 @@ class PipelineRunner:
                 balanced_samples=balanced_samples,
                 label_records=label_records,
                 validation_errors=validation_errors,
+                review_queue=review_queue,
+                class_quality_report=class_quality_report,
+                hard_negative_report=hard_negative_report,
+                license_report=license_report,
+                review_gate_result=review_gate_result,
+                quota_gate=quota_gate,
                 dataset_result=dataset_result,
                 training_result=training_result,
                 evaluation_report=evaluation_report,
@@ -156,13 +224,23 @@ class PipelineRunner:
             job_paths,
             bootstrap,
         )
-        class_plan = attach_source_counts(class_plan, usable_sources(source_manifest))
+        license_report = validate_source_licenses(source_manifest, self.config.governance)
+        allowed_source_manifest = allowed_sources_for_ingestion(
+            source_manifest,
+            license_report,
+            self.config.governance,
+        )
+        blocked_count = license_report.get("summary", {}).get("blocked", 0)
+        if blocked_count:
+            source_notes.append(f"Governance blocked {blocked_count} source(s) from ingestion.")
+
+        class_plan = attach_source_counts(class_plan, usable_sources(allowed_source_manifest))
         candidate_classes = [
             entry.name for entry in class_plan if entry.final_state in {"ready", "risky"}
         ]
-        web_sources = collect_web_image_sources(source_manifest, candidate_classes)
-        video_sources = collect_youtube_video_sources(source_manifest, candidate_classes)
-        return source_manifest, source_notes, web_sources, video_sources, class_plan
+        web_sources = collect_web_image_sources(allowed_source_manifest, candidate_classes)
+        video_sources = collect_youtube_video_sources(allowed_source_manifest, candidate_classes)
+        return source_manifest, source_notes, web_sources, video_sources, class_plan, license_report
 
     def _plan_classes(self) -> tuple[list[str], list]:
         requested_classes = normalize_classes(self.config.classes)
@@ -185,24 +263,52 @@ class PipelineRunner:
         all_samples = normalize_sources_to_samples(web_sources, extracted_frames)
         return extracted_frames, extraction_notes, all_samples
 
-    def _critic_stage(self, all_samples, class_plan):
+    def _critic_stage(self, all_samples, class_plan, job_paths: JobPaths):
         accepted_samples, rejected_samples, frame_scores = score_and_filter_samples(
             all_samples,
             self.config.critic,
         )
-        balanced_samples = rebalance_samples(
-            accepted_samples,
-            self.config.mix,
-            self.config.budgets.max_accepted_samples,
-            self.config.critic.min_samples_to_label,
+        requested_classes = [entry.name for entry in class_plan if entry.final_state != "blocked"]
+        hard_negative_report = (
+            mine_hard_negative_candidates(
+                self.config.output_root,
+                self.config.job_id,
+                requested_classes,
+                self.config.class_quality.hard_negative_top_k,
+            )
+            if self._class_quality_enabled()
+            else {"status": "disabled", "candidates": [], "summary": {"count": 0}}
         )
+        promoted_samples = promote_hard_negative_samples(accepted_samples, hard_negative_report)
+        if self._class_quality_enabled():
+            balanced_samples, class_quality_report = select_class_aware_samples(
+                promoted_samples,
+                classes=requested_classes,
+                mix=self.config.mix,
+                max_samples=self.config.budgets.max_accepted_samples,
+                min_candidate_pool=self.config.critic.min_samples_to_label,
+            )
+            frame_scores = update_frame_score_diagnostics(frame_scores, accepted_samples + rejected_samples)
+        else:
+            balanced_samples = rebalance_samples(
+                accepted_samples,
+                self.config.mix,
+                self.config.budgets.max_accepted_samples,
+                self.config.critic.min_samples_to_label,
+            )
+            class_quality_report = {
+                "enabled": False,
+                "legacy_mode": True,
+                "before_distribution": {},
+                "after_distribution": {},
+            }
         admitted_for_labeling = determine_label_admission(
             class_plan,
             balanced_samples,
             self.config.critic,
         )
         del rejected_samples
-        return balanced_samples, frame_scores, class_plan, admitted_for_labeling
+        return balanced_samples, frame_scores, class_plan, admitted_for_labeling, class_quality_report, hard_negative_report
 
     def _label_stage(
         self,
@@ -213,6 +319,12 @@ class PipelineRunner:
     ):
         label_records: list[LabelRecord] = []
         validation_errors: list[LabelRecord] = []
+        label_calls_used = 0
+        review_queue: dict[str, object] = {
+            "schema_version": 1,
+            "states": ["pending", "approved", "relabel_requested", "rejected"],
+            "items": [],
+        }
         label_inputs = [
             sample
             for sample in balanced_samples
@@ -225,13 +337,22 @@ class PipelineRunner:
                 provider = build_label_provider(self.config.label)
                 limited_inputs = label_inputs[: self.config.budgets.max_label_calls]
                 raw_labels = provider.label_samples(limited_inputs, admitted_for_labeling, class_map)
-                return validate_label_records(
+                if self._class_quality_enabled():
+                    valid, invalid, queue = validate_label_records_with_review(
+                        raw_labels,
+                        admitted_for_labeling,
+                        self.config.critic.min_label_confidence,
+                        self.config.class_quality,
+                    )
+                    return valid, invalid, queue, len(limited_inputs)
+                valid, invalid = validate_label_records(
                     raw_labels,
                     admitted_for_labeling,
                     self.config.critic.min_label_confidence,
                 )
+                return valid, invalid, review_queue, len(limited_inputs)
 
-            label_records, validation_errors = self._run_stage("labeling", perform_labeling)
+            label_records, validation_errors, review_queue, label_calls_used = self._run_stage("labeling", perform_labeling)
         else:
             self._run_context.checkpoint()
             self._run_context.skip_stage("labeling")
@@ -243,7 +364,7 @@ class PipelineRunner:
             label_records,
             self.config.critic,
         )
-        return label_records, validation_errors, class_plan, extraction_notes
+        return label_records, validation_errors, review_queue, class_plan, extraction_notes, label_calls_used
 
     def _finalize_run(
         self,
@@ -258,6 +379,12 @@ class PipelineRunner:
         balanced_samples,
         label_records: list[LabelRecord],
         validation_errors: list[LabelRecord],
+        review_queue: dict[str, object],
+        class_quality_report: dict[str, object],
+        hard_negative_report: dict[str, object],
+        license_report: dict[str, object],
+        review_gate_result: dict[str, object],
+        quota_gate: dict[str, object],
         dataset_result,
         training_result,
         evaluation_report,
@@ -274,11 +401,62 @@ class PipelineRunner:
             "frame_scores": str(job_paths.reports / "frame_scores.json"),
             "accepted_frames": str(job_paths.reports / "accepted_frames.json"),
             "labels_manifest": str(job_paths.reports / "labels_manifest.json"),
+            "class_quality_report": str(job_paths.reports / "class_quality_report.json"),
+            "review_queue": str(job_paths.reports / "review_queue.json"),
+            "hard_negative_candidates": str(job_paths.reports / "hard_negative_candidates.json"),
+            "class_quota_gate": str(job_paths.reports / "class_quota_gate.json"),
             "dataset_manifest": str(job_paths.reports / "dataset_manifest.json"),
             "training_results": str(job_paths.reports / "training_results.json"),
             "evaluation_report": str(job_paths.reports / "evaluation_report.json"),
+            "iteration_policy_report": str(job_paths.reports / "iteration_policy_report.json"),
+            "baseline_comparison": str(job_paths.reports / "baseline_comparison.json"),
+            "promotion_guard": str(job_paths.reports / "promotion_guard.json"),
+            "lineage_manifest": str(job_paths.reports / "lineage_manifest.json"),
+            "version_manifest": str(job_paths.reports / "version_manifest.json"),
+            "license_compliance_report": str(job_paths.reports / "license_compliance_report.json"),
+            "audit_log": str(job_paths.reports / "audit_log.json"),
+            "artifact_lifecycle": str(job_paths.reports / "artifact_lifecycle.json"),
             "run_summary": str(job_paths.reports / "run_summary.json"),
         }
+
+        version_manifest = build_version_manifest(
+            job_id=self.config.job_id,
+            source_manifest=source_manifest,
+            all_samples=all_samples,
+            accepted_samples=balanced_samples,
+            label_records=label_records,
+            dataset_result=dataset_result,
+            training_result=training_result,
+            iteration_decision=iteration_decision,
+        )
+        lineage_manifest = build_lineage_manifest(
+            job_id=self.config.job_id,
+            source_manifest=source_manifest,
+            all_samples=all_samples,
+            accepted_samples=balanced_samples,
+            label_records=label_records,
+            dataset_result=dataset_result,
+            version_manifest=version_manifest,
+            iteration_decision=iteration_decision,
+        )
+        audit_log = build_audit_log(
+            job_id=self.config.job_id,
+            license_report=license_report,
+            review_queue=review_queue,
+            iteration_decision=iteration_decision,
+        )
+        artifact_lifecycle = build_artifact_lifecycle(
+            artifacts,
+            self.config.governance,
+            export_status=str(license_report.get("export_status", "unknown")),
+        )
+        governance_report_summary = governance_summary(
+            license_report,
+            lineage_manifest,
+            version_manifest,
+            audit_log,
+            artifact_lifecycle,
+        )
 
         write_json(Path(artifacts["bootstrap"]), bootstrap)
         write_json(Path(artifacts["class_plan"]), class_plan)
@@ -287,9 +465,36 @@ class PipelineRunner:
         write_json(Path(artifacts["frame_scores"]), frame_scores)
         write_json(Path(artifacts["accepted_frames"]), balanced_samples)
         write_json(Path(artifacts["labels_manifest"]), {"valid": label_records, "invalid": validation_errors})
+        write_json(Path(artifacts["class_quality_report"]), class_quality_report)
+        write_json(Path(artifacts["review_queue"]), review_queue)
+        write_json(Path(artifacts["hard_negative_candidates"]), hard_negative_report)
+        write_json(Path(artifacts["class_quota_gate"]), quota_gate)
         write_json(Path(artifacts["dataset_manifest"]), dataset_result)
         write_json(Path(artifacts["training_results"]), training_result)
         write_json(Path(artifacts["evaluation_report"]), evaluation_report)
+        write_json(Path(artifacts["iteration_policy_report"]), iteration_decision.policy_report)
+        write_json(Path(artifacts["baseline_comparison"]), iteration_decision.baseline_comparison)
+        write_json(Path(artifacts["promotion_guard"]), iteration_decision.promotion_guard)
+        write_json(Path(artifacts["lineage_manifest"]), lineage_manifest)
+        write_json(Path(artifacts["version_manifest"]), version_manifest)
+        write_json(Path(artifacts["license_compliance_report"]), license_report)
+        write_json(Path(artifacts["audit_log"]), audit_log)
+        write_json(Path(artifacts["artifact_lifecycle"]), artifact_lifecycle)
+
+        per_class_counts = build_per_class_counts(
+            requested_classes,
+            balanced_samples,
+            label_records,
+            dataset_result,
+        )
+        review_summary = review_queue_summary(review_queue)
+        gate_notes = []
+        if review_gate_result.get("status") == "blocked":
+            gate_notes.extend(str(reason) for reason in review_gate_result.get("reasons", []))
+        if quota_gate.get("status") == "blocked":
+            gate_notes.extend(str(reason) for reason in quota_gate.get("reasons", []))
+        if license_report.get("export_status") == "blocked":
+            gate_notes.append("License compliance gate blocked export/training.")
 
         summary = RunSummary(
             job_id=self.config.job_id,
@@ -305,11 +510,30 @@ class PipelineRunner:
                 "max_label_calls": self.config.budgets.max_label_calls,
                 "max_accepted_samples": self.config.budgets.max_accepted_samples,
             },
-            notes=notes + iteration_decision.reasons,
+            notes=notes + gate_notes + iteration_decision.reasons + iteration_decision.warnings,
             artifact_paths=artifacts,
+            per_class_counts=per_class_counts,
+            quota_status=quota_gate,
+            review_queue_summary=review_summary,
+            hard_negative_summary=hard_negative_report.get("summary", {}),
+            iteration_policy=iteration_decision.policy_report,
+            baseline_comparison_summary=iteration_decision.baseline_comparison,
+            promotion_guard_summary=iteration_decision.promotion_guard,
+            governance_summary=governance_report_summary,
+            lineage_summary=lineage_manifest.get("summary", {}),
+            license_compliance=license_report,
+            version_summary={
+                "dataset_version_id": version_manifest.get("dataset_version_id"),
+                "model_version_id": version_manifest.get("model_version_id"),
+                "checksums": version_manifest.get("checksums", {}),
+            },
+            artifact_lifecycle=artifact_lifecycle.get("summary", {}),
         )
         write_json(Path(artifacts["run_summary"]), summary)
         return summary
+
+    def _class_quality_enabled(self) -> bool:
+        return self.config.class_quality.enabled and not self.config.class_quality.opt_out_legacy_mode
 
     def _resolve_source_manifest(
         self,

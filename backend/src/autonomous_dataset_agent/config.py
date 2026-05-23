@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from typing import Literal
 from pathlib import Path
 
-from .contracts import BudgetLimits, CriticThresholds, SourceMix
+from .contracts import (
+    BudgetLimits,
+    ClassQualityConfig,
+    CriticThresholds,
+    GovernanceConfig,
+    IterationPolicyConfig,
+    SourceMix,
+)
 from .utils import slugify
 
 
@@ -42,6 +50,36 @@ def _env_list(name: str, default: list[str]) -> list[str]:
     if value is None:
         return list(default)
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _env_lower_list(name: str, default: list[str]) -> list[str]:
+    return [item.strip().lower() for item in _env_list(name, default) if item.strip()]
+
+
+def _env_json_dict(name: str) -> dict[str, dict[str, float]]:
+    value = os.getenv(name)
+    if value is None:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    normalized: dict[str, dict[str, float]] = {}
+    for class_name, raw_metrics in payload.items():
+        if not isinstance(raw_metrics, dict):
+            continue
+        metrics: dict[str, float] = {}
+        for metric_name, metric_value in raw_metrics.items():
+            try:
+                metrics[str(metric_name)] = float(metric_value)
+            except (TypeError, ValueError):
+                continue
+        if metrics:
+            normalized[str(class_name).strip().lower()] = metrics
+    return normalized
 
 
 @dataclass
@@ -92,6 +130,9 @@ class JobConfig:
     budgets: BudgetLimits
     critic: CriticThresholds
     mix: SourceMix
+    class_quality: ClassQualityConfig = field(default_factory=ClassQualityConfig)
+    iteration_policy: IterationPolicyConfig = field(default_factory=IterationPolicyConfig)
+    governance: GovernanceConfig = field(default_factory=GovernanceConfig)
 
 
 def build_job_config(
@@ -111,6 +152,13 @@ def build_job_config(
     resolved_source_mode = (source_mode or os.getenv("SOURCE_MODE", "manifest")).strip().lower()
     provider_order = _env_list("WEB_SEARCH_PROVIDER_ORDER", ["duckduckgo", "bing"])
     resolved_output_root = Path(output_root or os.getenv("OUTPUT_ROOT", "backend/artifacts"))
+
+    budgets = BudgetLimits(
+        max_runtime_seconds=_env_int("MAX_RUNTIME_SECONDS", 1800),
+        max_downloaded_sources=_env_int("MAX_DOWNLOADED_SOURCES", 50),
+        max_label_calls=_env_int("MAX_LABEL_CALLS", 200),
+        max_accepted_samples=_env_int("MAX_ACCEPTED_SAMPLES", 150),
+    )
 
     return JobConfig(
         job_id=job_id,
@@ -147,12 +195,7 @@ def build_job_config(
             epochs=_env_int("YOLO_EPOCHS", 25),
             image_size=_env_int("YOLO_IMAGE_SIZE", 640),
         ),
-        budgets=BudgetLimits(
-            max_runtime_seconds=_env_int("MAX_RUNTIME_SECONDS", 1800),
-            max_downloaded_sources=_env_int("MAX_DOWNLOADED_SOURCES", 50),
-            max_label_calls=_env_int("MAX_LABEL_CALLS", 200),
-            max_accepted_samples=_env_int("MAX_ACCEPTED_SAMPLES", 150),
-        ),
+        budgets=budgets,
         critic=CriticThresholds(
             min_quality_score=_env_float("MIN_QUALITY_SCORE", 0.6),
             min_label_confidence=_env_float("MIN_LABEL_CONFIDENCE", 0.7),
@@ -170,5 +213,43 @@ def build_job_config(
         mix=SourceMix(
             web_target_ratio=_env_float("WEB_IMAGE_TARGET_RATIO", 0.7),
             video_target_ratio=_env_float("VIDEO_TARGET_RATIO", 0.3),
+        ),
+        class_quality=ClassQualityConfig(
+            enabled=_env_bool("CLASS_QUALITY_ENABLED", True),
+            min_train_samples=_env_int("CLASS_QUALITY_MIN_TRAIN_SAMPLES", 1),
+            min_val_samples=_env_int("CLASS_QUALITY_MIN_VAL_SAMPLES", 1),
+            review_confidence_threshold=_env_float("CLASS_QUALITY_REVIEW_CONFIDENCE_THRESHOLD", 0.75),
+            conflict_iou_threshold=_env_float("CLASS_QUALITY_CONFLICT_IOU_THRESHOLD", 0.5),
+            hard_negative_top_k=_env_int("CLASS_QUALITY_HARD_NEGATIVE_TOP_K", 10),
+            opt_out_legacy_mode=_env_bool("CLASS_QUALITY_OPT_OUT_LEGACY_MODE", False),
+        ),
+        iteration_policy=IterationPolicyConfig(
+            min_ap=_env_float("ITERATION_MIN_AP", 0.75),
+            min_precision=_env_float("ITERATION_MIN_PRECISION", 0.7),
+            min_recall=_env_float("ITERATION_MIN_RECALL", 0.7),
+            max_negative_ap_delta=_env_float("ITERATION_MAX_NEGATIVE_AP_DELTA", 0.05),
+            max_negative_precision_delta=_env_float("ITERATION_MAX_NEGATIVE_PRECISION_DELTA", 0.05),
+            max_negative_recall_delta=_env_float("ITERATION_MAX_NEGATIVE_RECALL_DELTA", 0.05),
+            min_promote_map50_gain=_env_float("ITERATION_MIN_PROMOTE_MAP50_GAIN", 0.01),
+            max_iterations=_env_int("ITERATION_MAX_ITERATIONS", 3),
+            max_runtime_seconds=_env_int("ITERATION_MAX_RUNTIME_SECONDS", budgets.max_runtime_seconds),
+            max_label_calls=_env_int("ITERATION_MAX_LABEL_CALLS", budgets.max_label_calls),
+            current_iteration=_env_int("ITERATION_CURRENT_ITERATION", 1),
+            critical_classes=_env_list("ITERATION_CRITICAL_CLASSES", []),
+            per_class_minimums=_env_json_dict("ITERATION_PER_CLASS_MINIMUMS"),
+            per_class_delta_tolerances=_env_json_dict("ITERATION_PER_CLASS_DELTA_TOLERANCES"),
+        ),
+        governance=GovernanceConfig(
+            enabled=_env_bool("GOVERNANCE_ENABLED", True),
+            require_license_metadata=_env_bool("GOVERNANCE_REQUIRE_LICENSE_METADATA", True),
+            require_provenance=_env_bool("GOVERNANCE_REQUIRE_PROVENANCE", True),
+            block_ingestion_on_violation=_env_bool("GOVERNANCE_BLOCK_INGESTION_ON_VIOLATION", True),
+            block_export_on_violation=_env_bool("GOVERNANCE_BLOCK_EXPORT_ON_VIOLATION", True),
+            allowed_usage_rights=_env_lower_list(
+                "GOVERNANCE_ALLOWED_USAGE_RIGHTS",
+                ["dataset_training", "model_training", "training"],
+            ),
+            retention_policy=os.getenv("GOVERNANCE_RETENTION_POLICY", "retain_until_reviewed"),
+            lifecycle_status=os.getenv("GOVERNANCE_LIFECYCLE_STATUS", "active"),
         ),
     )

@@ -32,6 +32,10 @@ def build_dataset(
 
     splits = _split_samples(usable_samples)
     split_counts: dict[str, int] = {}
+    class_split_counts: dict[str, dict[str, int]] = {
+        class_name: {"train": 0, "val": 0, "test": 0}
+        for class_name in admitted_classes
+    }
 
     for split_name, split_samples in splits.items():
         split_counts[split_name] = len(split_samples)
@@ -48,6 +52,8 @@ def build_dataset(
                 for box in record.boxes
                 if box.class_name in class_lookup
             ]
+            for class_name in {box.class_name for box in record.boxes if box.class_name in class_lookup}:
+                class_split_counts[class_name][split_name] += 1
             label_target.write_text("\n".join(lines), encoding="utf-8")
             record.label_path = str(label_target)
 
@@ -60,6 +66,7 @@ def build_dataset(
         data_yaml_path=str(data_yaml_path),
         class_map=class_map,
         split_counts=split_counts,
+        class_split_counts=class_split_counts,
     )
 
 
