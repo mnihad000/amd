@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from dataclasses import replace
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -56,6 +57,7 @@ class HealthResponse(BaseModel):
     queued_run_count: int
     artifacts_root: str
     index_path: str
+    backpressure: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReviewDecision(BaseModel):
@@ -221,6 +223,7 @@ def create_app(
     build_config_fn: BuildJobConfigFn = build_job_config,
     runner_factory: RunnerFactory = PipelineRunner,
     max_workers: int = 1,
+    max_queue_size: int = 100,
     shutdown_grace_period_seconds: float = 2.0,
 ) -> FastAPI:
     resolved_artifacts_root = artifacts_root or _default_artifacts_root()
@@ -230,6 +233,7 @@ def create_app(
         store=store,
         runner_factory=runner_factory,
         max_workers=max_workers,
+        max_queue_size=max_queue_size,
         shutdown_grace_period_seconds=shutdown_grace_period_seconds,
     )
 
@@ -308,6 +312,7 @@ def create_app(
             queued_run_count=manager.queued_count(),
             artifacts_root=str(resolved_artifacts_root),
             index_path=str(resolved_index_path),
+            backpressure=manager.backpressure_state(),
         )
 
     @app.get("/runs/{job_id}/artifacts", response_model=ArtifactsResponse)
@@ -431,6 +436,41 @@ def create_app(
                 "items": items,
             },
         )
+
+    @app.post("/runs/{job_id}/dead-letter/replay", response_model=RunResource, status_code=202)
+    def replay_dead_letter(job_id: str) -> RunResource | JSONResponse:
+        response = store.load_or_rehydrate(job_id, resolved_artifacts_root)
+        if response is None:
+            return _error_response(404, "run_not_found", f"Run '{job_id}' was not found.")
+
+        record = store.get_record(job_id)
+        if record is None:
+            return _error_response(404, "run_not_found", f"Run '{job_id}' was not found.")
+
+        dead_letter_path = _artifact_path(record, "dead_letter")
+        if dead_letter_path is None:
+            fallback_path = _run_root(record) / "reports" / "dead_letter.json"
+            if fallback_path.exists():
+                dead_letter_path = fallback_path
+        if dead_letter_path is None or not dead_letter_path.exists():
+            return _error_response(404, "dead_letter_not_found", f"Dead-letter artifact for run '{job_id}' was not found.")
+        dead_letter = read_json(dead_letter_path)
+        if not isinstance(dead_letter, dict) or dead_letter.get("status") == "empty":
+            return _error_response(409, "invalid_request", f"Run '{job_id}' has no captured dead-letter failure.")
+
+        config = build_config_fn(
+            record.prompt,
+            record.classes,
+            record.output_root,
+            None,
+            record.source_mode,
+        )
+        replay_hint = dead_letter.get("replay", {}).get("replay_job_id_hint") if isinstance(dead_letter.get("replay"), dict) else f"{job_id}-replay"
+        replay_config = replace(config, job_id=str(replay_hint))
+        try:
+            return manager.enqueue(replay_config)
+        except RuntimeError as exc:
+            return _error_response(503, "invalid_request", str(exc))
 
     @app.get("/runs/{job_id}/files/{file_path:path}", name="get_run_file")
     def get_run_file(job_id: str, file_path: str):

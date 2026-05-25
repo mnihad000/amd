@@ -11,6 +11,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { ArtifactPanels } from "@/components/dashboard/artifact-panels"
+import { EnterpriseOpsPanels } from "@/components/dashboard/enterprise-ops-panels"
 import { formatDateTime, statusTone } from "@/components/dashboard/format"
 import { RecentRunsList } from "@/components/dashboard/recent-runs-list"
 import { RunComposer } from "@/components/dashboard/run-composer"
@@ -308,6 +309,7 @@ export function DashboardApp() {
           <section ref={workspaceRef} className="space-y-6">
             <RunStatusHeader run={activeRun} cancelling={cancelling} onCancel={handleCancel} />
             <StageTimeline run={activeRun} />
+            <EnterpriseOpsPanels run={activeRun} />
             <ArtifactPanels run={activeRun} artifactData={artifactData} artifactError={artifactError} />
           </section>
 

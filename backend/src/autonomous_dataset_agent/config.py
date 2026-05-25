@@ -13,7 +13,9 @@ from .contracts import (
     CriticThresholds,
     GovernanceConfig,
     IterationPolicyConfig,
+    ObservabilityConfig,
     PromotionGateConfig,
+    ResilienceConfig,
     RuntimeProfileConfig,
     SourceMix,
 )
@@ -152,6 +154,8 @@ class JobConfig:
     runtime_profile: RuntimeProfileConfig = field(default_factory=RuntimeProfileConfig)
     promotion_gate: PromotionGateConfig = field(default_factory=PromotionGateConfig)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+    resilience: ResilienceConfig = field(default_factory=ResilienceConfig)
 
 
 def build_job_config(
@@ -302,5 +306,29 @@ def build_job_config(
             repeated_seed_values=[int(item) for item in _env_list("BENCHMARK_REPEATED_SEED_VALUES", ["11", "42", "73"])],
             cross_validation=_env_bool("BENCHMARK_CROSS_VALIDATION", False),
             cross_validation_folds=_env_int("BENCHMARK_CROSS_VALIDATION_FOLDS", 3),
+        ),
+        observability=ObservabilityConfig(
+            enabled=_env_bool("OBSERVABILITY_ENABLED", True),
+            service_name=os.getenv("OBSERVABILITY_SERVICE_NAME", "autonomous-dataset-agent"),
+            otel_exporter_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            prometheus_namespace=os.getenv("PROMETHEUS_NAMESPACE", "ada"),
+            log_schema_version=_env_int("LOG_SCHEMA_VERSION", 1),
+            stuck_run_seconds=_env_int("ALERT_STUCK_RUN_SECONDS", 900),
+            repeated_stage_failure_threshold=_env_int("ALERT_REPEATED_STAGE_FAILURE_THRESHOLD", 3),
+            class_regression_ap_delta=_env_float("ALERT_CLASS_REGRESSION_AP_DELTA", 0.05),
+            drift_ap_delta=_env_float("ALERT_DRIFT_AP_DELTA", 0.05),
+            budget_spend_ratio=_env_float("ALERT_BUDGET_SPEND_RATIO", 0.9),
+        ),
+        resilience=ResilienceConfig(
+            enabled=_env_bool("RESILIENCE_ENABLED", True),
+            max_stage_attempts=_env_int("RESILIENCE_MAX_STAGE_ATTEMPTS", 2),
+            retry_backoff_seconds=_env_float("RESILIENCE_RETRY_BACKOFF_SECONDS", 0.0),
+            dead_letter_enabled=_env_bool("RESILIENCE_DEAD_LETTER_ENABLED", True),
+            checkpoint_enabled=_env_bool("RESILIENCE_CHECKPOINT_ENABLED", True),
+            queue_limit=_env_int("RESILIENCE_QUEUE_LIMIT", 100),
+            max_concurrent_runs=_env_int("RESILIENCE_MAX_CONCURRENT_RUNS", 1),
+            default_stage_sla_seconds=_env_int("RESILIENCE_DEFAULT_STAGE_SLA_SECONDS", 900),
+            stage_sla_seconds={key: int(value) for key, value in _env_str_dict("RESILIENCE_STAGE_SLA_SECONDS").items() if str(value).isdigit()},
+            rollback_on_promotion_block=_env_bool("RESILIENCE_ROLLBACK_ON_PROMOTION_BLOCK", True),
         ),
     )

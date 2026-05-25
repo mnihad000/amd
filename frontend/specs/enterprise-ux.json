@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "surface": "enterprise_dashboard",
+  "operations_dashboard": {
+    "run_list_filters": ["status", "class", "source_mode", "updated_range", "alert_state", "sla_state"],
+    "run_drill_down": ["summary", "stage_history", "artifact_links", "monitoring_summary", "orchestration_resilience"],
+    "stage_diagnostics": ["latency", "throughput", "failure_count", "retry_count", "queue_depth", "sla_state"],
+    "failure_root_cause_panes": ["dead_letter", "structured_logs", "alert_evaluation", "rollback_plan"]
+  },
+  "class_health_regression_views": {
+    "comparison": "side_by_side_model_or_run",
+    "panels": ["per_class_ap_trend", "per_class_precision_trend", "per_class_recall_trend", "metric_delta", "regression_gate_status"],
+    "artifact_sources": ["evaluation_report", "baseline_comparison", "promotion_guard", "alert_evaluation"]
+  },
+  "label_qa_review_workflow": {
+    "surfaces": ["pending_queue", "decision_actions", "audit_linked_decision_history"],
+    "actions": ["approve", "reject", "relabel_requested"],
+    "artifact_sources": ["review_queue", "labels_manifest", "audit_log"]
+  },
+  "governance_visibility": {
+    "surfaces": ["lineage_explorer", "license_compliance_status", "policy_violation_timeline"],
+    "artifact_sources": ["lineage_manifest", "license_compliance_report", "audit_log", "artifact_lifecycle"]
+  },
+  "usage_cost_system_health": {
+    "panels": ["run_cost", "stage_cost", "budget_spend_ratio", "queue_health", "alert_state", "sla_state"],
+    "artifact_sources": ["prometheus_metrics", "alert_evaluation", "monitoring_summary", "concurrency_policy"]
+  },
+  "iteration_explainability": {
+    "panels": ["selected_action", "target_classes", "policy_reasons", "budget_snapshot", "regression_gate_status"],
+    "artifact_sources": ["iteration_policy_report", "baseline_comparison", "promotion_guard"]
+  },
+  "rbac_matrix": {
+    "Operator": {
+      "pages": ["operations_dashboard", "run_drill_down", "system_health"],
+      "actions": ["create_run", "cancel_run", "read_monitoring", "read_artifacts"],
+      "denied": ["review_labels", "manage_policy", "rollback", "manage_compliance"]
+    },
+    "Reviewer": {
+      "pages": ["label_qa", "artifact_review", "class_health"],
+      "actions": ["read_review_queue", "approve_label", "reject_label", "request_relabel", "read_related_artifacts"],
+      "denied": ["manage_policy", "rollback", "manage_compliance"]
+    },
+    "Admin": {
+      "pages": ["admin_controls", "policy_config", "rollback", "compliance", "cost_management"],
+      "actions": ["manage_policy", "manage_config", "rollback", "manage_compliance", "read_all_artifacts"],
+      "denied": []
+    }
+  },
+  "phased_delivery": [
+    {
+      "phase": 1,
+      "name": "read_only_operations_health",
+      "scope": ["operations_dashboard", "run_drill_down", "stage_diagnostics", "usage_cost_system_health"]
+    },
+    {
+      "phase": 2,
+      "name": "review_governance_audit",
+      "scope": ["label_qa_review_workflow", "governance_visibility", "class_health_regression_views"]
+    },
+    {
+      "phase": 3,
+      "name": "admin_cost_compliance_controls",
+      "scope": ["admin_controls", "cost_management", "compliance_management", "rollback_controls"]
+    }
+  ],
+  "route_compatibility": {
+    "existing_dashboard_route": "/app",
+    "existing_run_detail_flow": "query_param_run_selection",
+    "phase_1_behavior": "additive_read_only_panels"
+  }
+}

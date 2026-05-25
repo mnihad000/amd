@@ -64,6 +64,8 @@ class RunResource(BaseModel):
     license_compliance: dict[str, Any] | None = None
     version_summary: dict[str, Any] | None = None
     artifact_lifecycle: dict[str, Any] | None = None
+    monitoring_summary: dict[str, Any] | None = None
+    orchestration_resilience: dict[str, Any] | None = None
     stage_history: list[StageRecord] = Field(default_factory=list)
     progress: RunProgress
 
@@ -547,6 +549,8 @@ class RunStore:
             license_compliance=summary.get("license_compliance") if isinstance(summary, dict) else None,
             version_summary=summary.get("version_summary") if isinstance(summary, dict) else None,
             artifact_lifecycle=summary.get("artifact_lifecycle") if isinstance(summary, dict) else None,
+            monitoring_summary=summary.get("monitoring_summary") if isinstance(summary, dict) else None,
+            orchestration_resilience=summary.get("orchestration_resilience") if isinstance(summary, dict) else None,
             stage_history=stage_history,
             progress=RunProgress(
                 total_stages=total_stages,
@@ -591,11 +595,13 @@ class JobManager:
         store: RunStore,
         runner_factory: RunnerFactory,
         max_workers: int = 1,
+        max_queue_size: int = 100,
         shutdown_grace_period_seconds: float = 2.0,
     ) -> None:
         self.store = store
         self.runner_factory = runner_factory
         self.max_workers = max(1, max_workers)
+        self.max_queue_size = max(1, max_queue_size)
         self.shutdown_grace_period_seconds = shutdown_grace_period_seconds
         self._queue: Queue[JobConfig | None] = Queue()
         self._queued_job_ids: set[str] = set()
@@ -658,6 +664,8 @@ class JobManager:
         with self._state_lock:
             if not self._accepting_runs:
                 raise RuntimeError("Service is shutting down and cannot accept new runs.")
+            if len(self._queued_job_ids) >= self.max_queue_size:
+                raise RuntimeError("Run queue is at capacity; backpressure is rejecting new runs.")
 
         allocated_job_id = self.store.allocate_job_id(config.job_id, config.output_root)
         resolved_config = replace(config, job_id=allocated_job_id)
@@ -679,6 +687,16 @@ class JobManager:
     def accepting_runs(self) -> bool:
         with self._state_lock:
             return self._accepting_runs
+
+    def backpressure_state(self) -> dict[str, Any]:
+        with self._state_lock:
+            queued_count = len(self._queued_job_ids)
+            return {
+                "queue_limit": self.max_queue_size,
+                "queued_count": queued_count,
+                "active_count": len(self._active_runs),
+                "backpressure_state": "rejecting" if queued_count >= self.max_queue_size else "accepting",
+            }
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():

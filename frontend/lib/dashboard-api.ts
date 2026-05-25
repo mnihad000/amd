@@ -34,6 +34,34 @@ export interface RunSummaryPayload {
   budgets: Record<string, number>
   notes: string[]
   artifact_paths: Record<string, string>
+  per_class_counts?: Record<string, Record<string, number>>
+  review_queue_summary?: Record<string, number>
+  iteration_policy?: Record<string, unknown>
+  baseline_comparison_summary?: Record<string, unknown>
+  promotion_guard_summary?: Record<string, unknown>
+  governance_summary?: Record<string, unknown>
+  lineage_summary?: Record<string, number>
+  license_compliance?: { export_status?: string; summary?: Record<string, number> }
+  monitoring_summary?: MonitoringSummary
+  orchestration_resilience?: OrchestrationResilience
+}
+
+export interface MonitoringSummary {
+  enabled?: boolean
+  correlation_key?: string
+  prometheus?: { metric_count?: number; scrape_artifact?: string }
+  loki?: { log_count?: number; log_artifact?: string }
+  grafana?: { dashboard_artifact?: string; alert_policy_artifact?: string }
+  alerts?: { status?: string; triggered_count?: number; critical_count?: number; warning_count?: number; error_count?: number }
+}
+
+export interface OrchestrationResilience {
+  enabled?: boolean
+  retry?: { max_stage_attempts?: number; checkpoint_count?: number; next_resume_stage?: string | null }
+  dead_letter?: { status?: string; stage?: string | null }
+  rollback?: { status?: string; last_stable_job_id?: string | null }
+  concurrency?: { backpressure_state?: string; queue_limit?: number; queued_count?: number; active_count?: number }
+  sla?: { overall_state?: string; stage_states?: Record<string, { state?: string; escalation?: string }> }
 }
 
 export interface RunResource {
@@ -48,6 +76,8 @@ export interface RunResource {
   updated_at: string
   error: RunError | null
   summary: RunSummaryPayload | null
+  monitoring_summary: MonitoringSummary | null
+  orchestration_resilience: OrchestrationResilience | null
   stage_history: StageHistoryEntry[]
   progress: RunProgress
 }

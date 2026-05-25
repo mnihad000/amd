@@ -220,29 +220,29 @@
 - Alerting is mandatory for operational failure and model-quality degradation states.
 
 **Implementation checklist**
-- [ ] Define telemetry contract for:
+- [x] Define telemetry contract for:
   - stage latency/throughput/failure/retry/queue depth
   - class-level acceptance rates, AP drift, label-confidence distributions
   - run/stage-level cost signals
-- [ ] Propagate `job_id` end-to-end as primary correlation key across pipeline and external sinks.
-- [ ] Integrate self-hosted observability stack:
+- [x] Propagate `job_id` end-to-end as primary correlation key across pipeline and external sinks.
+- [x] Integrate self-hosted observability stack:
   - OpenTelemetry instrumentation for traces/metrics/log correlation
   - Prometheus for metric scraping and retention
   - Loki for structured log aggregation
   - Grafana for dashboards and alerting
-- [ ] Standardize structured logging envelope with correlation fields and severity taxonomy.
-- [ ] Add alert policy definitions for:
+- [x] Standardize structured logging envelope with correlation fields and severity taxonomy.
+- [x] Add alert policy definitions for:
   - stuck runs
   - repeated stage failures
   - class regression and drift anomalies
   - budget anomalies
-- [ ] Add additive API monitoring summary objects linked to internal telemetry store.
+- [x] Add additive API monitoring summary objects linked to internal telemetry store.
 
 **Validation checklist (section 5)**
-- [ ] Unit: telemetry schema validation and required field completeness.
-- [ ] Integration: Prometheus/Loki/Grafana pipeline returns expected run/class metrics and logs.
-- [ ] Integration: alert rules trigger correctly for simulated failure/degradation scenarios.
-- [ ] Regression: run flow remains operational when observability sink is temporarily unavailable.
+- [x] Unit: telemetry schema validation and required field completeness.
+- [x] Integration: Prometheus/Loki/Grafana pipeline returns expected run/class metrics and logs.
+- [x] Integration: alert rules trigger correctly for simulated failure/degradation scenarios.
+- [x] Regression: run flow remains operational when observability sink is temporarily unavailable.
 
 ### 6. Production Orchestrator and Workflow Resilience
 
@@ -252,21 +252,21 @@
 - Backward-compatible API/run lifecycle behavior must be preserved while adding resilience metadata.
 
 **Implementation checklist**
-- [ ] Define idempotency contracts per stage (keys, side effects, replay safety rules).
-- [ ] Add durable retry policy with deterministic stage replay sequencing.
-- [ ] Add dead-letter capture and replay path for non-recoverable failures.
-- [ ] Add checkpoint state model and resume semantics for long-running stages.
-- [ ] Add rollback workflow to last stable promoted model/artifact set on promotion failure/regression block.
-- [ ] Add concurrency/backpressure policies for burst control and queue stability.
-- [ ] Add SLA-aware execution states and escalation policy mapping.
-- [ ] Expose additive orchestration resilience status in run summary/API detail payload.
+- [x] Define idempotency contracts per stage (keys, side effects, replay safety rules).
+- [x] Add durable retry policy with deterministic stage replay sequencing.
+- [x] Add dead-letter capture and replay path for non-recoverable failures.
+- [x] Add checkpoint state model and resume semantics for long-running stages.
+- [x] Add rollback workflow to last stable promoted model/artifact set on promotion failure/regression block.
+- [x] Add concurrency/backpressure policies for burst control and queue stability.
+- [x] Add SLA-aware execution states and escalation policy mapping.
+- [x] Expose additive orchestration resilience status in run summary/API detail payload.
 
 **Validation checklist (section 6)**
-- [ ] Unit: stage replay preserves idempotent outputs under retries.
-- [ ] Integration: dead-letter routing and replay produce deterministic outcomes.
-- [ ] Integration: checkpoint resume restores execution without duplicate side effects.
-- [ ] Integration: rollback restores last stable promoted artifact/model set.
-- [ ] Regression: existing lifecycle endpoints remain contract-compatible.
+- [x] Unit: stage replay preserves idempotent outputs under retries.
+- [x] Integration: dead-letter routing and replay produce deterministic outcomes.
+- [x] Integration: checkpoint resume restores execution without duplicate side effects.
+- [x] Integration: rollback restores last stable promoted artifact/model set.
+- [x] Regression: existing lifecycle endpoints remain contract-compatible.
 
 ### 7. Frontend Enterprise UX Improvements
 
@@ -277,33 +277,33 @@
 - Delivery is phased: read-only ops -> review/governance workflows -> admin/cost/compliance controls.
 
 **Implementation checklist**
-- [ ] Define operations dashboard spec with:
+- [x] Define operations dashboard spec with:
   - run list filters, run drill-down, stage diagnostics, failure root-cause panes
-- [ ] Define class-health and regression views:
+- [x] Define class-health and regression views:
   - side-by-side model/run comparison
   - per-class AP/precision/recall trend and delta panels
-- [ ] Define label QA/review workflow surfaces:
+- [x] Define label QA/review workflow surfaces:
   - pending queue, decision actions, audit-linked decision history
-- [ ] Define governance visibility surfaces:
+- [x] Define governance visibility surfaces:
   - lineage explorer
   - license/compliance status panels
   - policy violation timeline
-- [ ] Define usage/cost/system health panels using internal telemetry and alert state.
-- [ ] Define iteration explainability panels from deterministic policy artifacts.
-- [ ] Add explicit RBAC matrix:
+- [x] Define usage/cost/system health panels using internal telemetry and alert state.
+- [x] Define iteration explainability panels from deterministic policy artifacts.
+- [x] Add explicit RBAC matrix:
   - Operator: run ops + monitoring read
   - Reviewer: label/review actions + related artifact access
   - Admin: policy/config/rollback/compliance management
-- [ ] Add phased frontend delivery sequence:
+- [x] Add phased frontend delivery sequence:
   - Phase 1: read-only operations + health dashboards
   - Phase 2: review workflows + governance/audit views
   - Phase 3: admin controls + cost/compliance management
 
 **Validation checklist (section 7)**
-- [ ] UX acceptance: each role only sees allowed pages/actions per RBAC matrix.
-- [ ] Integration: monitoring panels reflect internal metrics/logs consistently with backend artifacts.
-- [ ] Integration: class-level drilldowns match evaluation/iteration report values.
-- [ ] Regression: existing dashboard routes and run detail flow remain usable during phased rollout.
+- [x] UX acceptance: each role only sees allowed pages/actions per RBAC matrix.
+- [x] Integration: monitoring panels reflect internal metrics/logs consistently with backend artifacts.
+- [x] Integration: class-level drilldowns match evaluation/iteration report values.
+- [x] Regression: existing dashboard routes and run detail flow remain usable during phased rollout.
 
 ## Execution Note
 

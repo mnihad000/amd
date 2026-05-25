@@ -41,6 +41,12 @@ from .iteration import decide_next_step
 from .iteration_policy import BudgetState, load_last_promoted_baseline
 from .labeling import build_label_provider, validate_label_records, validate_label_records_with_review
 from .query_generation import generate_class_queries
+from .resilience import (
+    build_resilience_artifacts,
+    build_retry_policy,
+    capture_dead_letter,
+    write_checkpoint_state,
+)
 from .sources import (
     collect_web_image_sources,
     collect_youtube_video_sources,
@@ -62,7 +68,8 @@ from .training_hardening import (
     build_runtime_profile,
     check_benchmark_regression,
 )
-from .run_lifecycle import PipelineRunContext, StageName
+from .run_lifecycle import PipelineRunContext, RunAbortedError, StageName
+from .telemetry import build_observability_artifacts
 from .utils import ensure_dir, write_json
 from .web_search import search_web_image_candidates
 from .youtube_search import download_youtube_sources, search_youtube_candidates
@@ -72,6 +79,7 @@ class PipelineRunner:
     def __init__(self, config: JobConfig, run_context: PipelineRunContext | None = None) -> None:
         self.config = config
         self._run_context = run_context or PipelineRunContext()
+        self._stage_attempts: dict[StageName, int] = {}
 
     def set_run_context(self, run_context: PipelineRunContext) -> None:
         self._run_context = run_context
@@ -249,18 +257,47 @@ class PipelineRunner:
                 source_breakdown=dict(source_breakdown),
                 notes=notes,
                 admitted_for_training=admitted_for_training,
+                label_calls_used=label_calls_used,
             ),
         )
 
     def _run_stage(self, stage_name: StageName, func):
-        self._run_context.start_stage(stage_name)
-        try:
-            result = func()
-        except Exception:
-            self._run_context.fail_stage(stage_name)
-            raise
-        self._run_context.complete_stage(stage_name)
-        return result
+        max_attempts = max(1, self.config.resilience.max_stage_attempts if self.config.resilience.enabled else 1)
+        reports_dir = ensure_dir(self.config.output_root / self.config.job_id / "reports")
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            self._stage_attempts[stage_name] = attempt
+            self._run_context.start_stage(stage_name)
+            try:
+                result = func()
+            except Exception as exc:
+                last_error = exc
+                self._run_context.fail_stage(stage_name)
+                if isinstance(exc, RunAbortedError) or attempt >= max_attempts:
+                    if self.config.resilience.enabled and self.config.resilience.dead_letter_enabled:
+                        capture_dead_letter(
+                            reports_dir=reports_dir,
+                            job_id=self.config.job_id,
+                            stage_name=stage_name,
+                            attempt=attempt,
+                            exc=exc,
+                            retry_policy=build_retry_policy(self.config.resilience),
+                        )
+                    raise
+                continue
+            self._run_context.complete_stage(stage_name)
+            if self.config.resilience.enabled and self.config.resilience.checkpoint_enabled:
+                write_checkpoint_state(
+                    reports_dir=reports_dir,
+                    job_id=self.config.job_id,
+                    stage_name=stage_name,
+                    attempt=attempt,
+                    status="completed",
+                )
+            return result
+
+        assert last_error is not None
+        raise last_error
 
     def _resolve_sources(
         self,
@@ -447,6 +484,7 @@ class PipelineRunner:
         source_breakdown: dict[str, int],
         notes: list[str],
         admitted_for_training: list[str],
+        label_calls_used: int,
     ) -> RunSummary:
         artifacts = {
             "bootstrap": str(job_paths.reports / "bootstrap.json"),
@@ -476,6 +514,21 @@ class PipelineRunner:
             "license_compliance_report": str(job_paths.reports / "license_compliance_report.json"),
             "audit_log": str(job_paths.reports / "audit_log.json"),
             "artifact_lifecycle": str(job_paths.reports / "artifact_lifecycle.json"),
+            "telemetry_contract": str(job_paths.reports / "telemetry_contract.json"),
+            "otel_traces": str(job_paths.reports / "otel_traces.json"),
+            "prometheus_metrics": str(job_paths.reports / "prometheus_metrics.prom"),
+            "loki_log_envelopes": str(job_paths.reports / "loki_log_envelopes.json"),
+            "grafana_dashboard": str(job_paths.reports / "grafana_dashboard.json"),
+            "alert_policies": str(job_paths.reports / "alert_policies.json"),
+            "alert_evaluation": str(job_paths.reports / "alert_evaluation.json"),
+            "idempotency_contracts": str(job_paths.reports / "idempotency_contracts.json"),
+            "retry_policy": str(job_paths.reports / "retry_policy.json"),
+            "checkpoint_manifest": str(job_paths.reports / "checkpoint_manifest.json"),
+            "dead_letter": str(job_paths.reports / "dead_letter.json"),
+            "rollback_plan": str(job_paths.reports / "rollback_plan.json"),
+            "concurrency_policy": str(job_paths.reports / "concurrency_policy.json"),
+            "sla_escalation_policy": str(job_paths.reports / "sla_escalation_policy.json"),
+            "sla_state": str(job_paths.reports / "sla_state.json"),
             "run_summary": str(job_paths.reports / "run_summary.json"),
         }
 
@@ -516,6 +569,41 @@ class PipelineRunner:
             version_manifest,
             audit_log,
             artifact_lifecycle,
+        )
+        monitoring_summary = build_observability_artifacts(
+            job_id=self.config.job_id,
+            reports_dir=job_paths.reports,
+            stage_telemetry=self._run_context.stage_telemetry(),
+            accepted_samples=balanced_samples,
+            label_records=label_records,
+            evaluation_report=evaluation_report,
+            class_quality_report=class_quality_report,
+            iteration_comparison=iteration_decision.baseline_comparison,
+            budgets={
+                "max_runtime_seconds": self.config.budgets.max_runtime_seconds,
+                "max_downloaded_sources": self.config.budgets.max_downloaded_sources,
+                "max_label_calls": self.config.budgets.max_label_calls,
+                "max_accepted_samples": self.config.budgets.max_accepted_samples,
+            },
+            label_calls_used=label_calls_used,
+            config=self.config.observability,
+        )
+        if self.config.resilience.enabled and self.config.resilience.checkpoint_enabled:
+            write_checkpoint_state(
+                reports_dir=job_paths.reports,
+                job_id=self.config.job_id,
+                stage_name="finalize",
+                attempt=self._stage_attempts.get("finalize", 1),
+                status="completed",
+            )
+        orchestration_resilience = build_resilience_artifacts(
+            reports_dir=job_paths.reports,
+            output_root=self.config.output_root,
+            job_id=self.config.job_id,
+            stage_telemetry=self._run_context.stage_telemetry(),
+            promotion_gate=promotion_gate,
+            version_manifest=version_manifest,
+            config=self.config.resilience,
         )
 
         write_json(Path(artifacts["bootstrap"]), bootstrap)
@@ -605,6 +693,8 @@ class PipelineRunner:
                 "checksums": version_manifest.get("checksums", {}),
             },
             artifact_lifecycle=artifact_lifecycle.get("summary", {}),
+            monitoring_summary=monitoring_summary,
+            orchestration_resilience=orchestration_resilience,
         )
         write_json(Path(artifacts["run_summary"]), summary)
         return summary

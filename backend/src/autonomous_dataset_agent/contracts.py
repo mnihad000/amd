@@ -115,6 +115,34 @@ class BenchmarkConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    enabled: bool = True
+    service_name: str = "autonomous-dataset-agent"
+    otel_exporter_endpoint: str | None = None
+    prometheus_namespace: str = "ada"
+    log_schema_version: int = 1
+    stuck_run_seconds: int = 900
+    repeated_stage_failure_threshold: int = 3
+    class_regression_ap_delta: float = 0.05
+    drift_ap_delta: float = 0.05
+    budget_spend_ratio: float = 0.9
+
+
+@dataclass
+class ResilienceConfig:
+    enabled: bool = True
+    max_stage_attempts: int = 2
+    retry_backoff_seconds: float = 0.0
+    dead_letter_enabled: bool = True
+    checkpoint_enabled: bool = True
+    queue_limit: int = 100
+    max_concurrent_runs: int = 1
+    default_stage_sla_seconds: int = 900
+    stage_sla_seconds: dict[str, int] = field(default_factory=dict)
+    rollback_on_promotion_block: bool = True
+
+
+@dataclass
 class SourceRecord:
     id: str
     source_type: str
@@ -271,3 +299,5 @@ class RunSummary:
     license_compliance: dict[str, object] = field(default_factory=dict)
     version_summary: dict[str, object] = field(default_factory=dict)
     artifact_lifecycle: dict[str, object] = field(default_factory=dict)
+    monitoring_summary: dict[str, object] = field(default_factory=dict)
+    orchestration_resilience: dict[str, object] = field(default_factory=dict)
