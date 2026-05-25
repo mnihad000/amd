@@ -27,6 +27,16 @@ def evaluate_run(training_result: TrainingResult, class_plan: list[ClassPlanEntr
     if recall is not None and recall < 0.7:
         notes.append("Recall is below the default target threshold.")
 
+    per_class_metrics = {
+        entry.name: {
+            "ap": map50,
+            "precision": precision,
+            "recall": recall,
+        }
+        for entry in class_plan
+        if entry.final_state == "ready"
+    }
+
     return EvaluationReport(
         status="completed",
         map50=map50,
@@ -34,5 +44,6 @@ def evaluate_run(training_result: TrainingResult, class_plan: list[ClassPlanEntr
         recall=recall,
         weak_classes=weak_classes,
         class_outcomes=class_outcomes,
+        per_class_metrics=per_class_metrics,
         notes=notes,
     )

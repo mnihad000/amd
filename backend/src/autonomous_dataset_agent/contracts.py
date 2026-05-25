@@ -79,6 +79,42 @@ class GovernanceConfig:
 
 
 @dataclass
+class RuntimeProfileConfig:
+    seed: int = 42
+    deterministic: bool = True
+    dependency_pins: dict[str, str] = field(default_factory=dict)
+    container_image: str = "python:3.11-slim"
+    container_digest: str | None = None
+    execution_baseline: str = "local-container-compatible"
+
+
+@dataclass
+class PromotionGateConfig:
+    enabled: bool = True
+    min_map50: float = 0.75
+    min_precision: float = 0.7
+    min_recall: float = 0.7
+    min_per_class_ap: float = 0.75
+    min_per_class_precision: float = 0.7
+    min_per_class_recall: float = 0.7
+    block_on_benchmark_regression: bool = True
+
+
+@dataclass
+class BenchmarkConfig:
+    enabled: bool = True
+    approved_snapshot_path: Path | None = None
+    max_map50_regression: float = 0.02
+    max_precision_regression: float = 0.02
+    max_recall_regression: float = 0.02
+    long_tail_min_recall: float = 0.65
+    repeated_seed_runs: bool = False
+    repeated_seed_values: list[int] = field(default_factory=lambda: [11, 42, 73])
+    cross_validation: bool = False
+    cross_validation_folds: int = 3
+
+
+@dataclass
 class SourceRecord:
     id: str
     source_type: str
@@ -167,6 +203,7 @@ class EvaluationReport:
     weak_classes: list[str] = field(default_factory=list)
     class_outcomes: dict[str, str] = field(default_factory=dict)
     per_class_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    class_failure_diagnostics: dict[str, dict[str, object]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
 
@@ -224,6 +261,11 @@ class RunSummary:
     iteration_policy: dict[str, object] = field(default_factory=dict)
     baseline_comparison_summary: dict[str, object] = field(default_factory=dict)
     promotion_guard_summary: dict[str, object] = field(default_factory=dict)
+    runtime_profile: dict[str, object] = field(default_factory=dict)
+    promotion_gate_summary: dict[str, object] = field(default_factory=dict)
+    benchmark_summary: dict[str, object] = field(default_factory=dict)
+    benchmark_regression_summary: dict[str, object] = field(default_factory=dict)
+    advanced_validation_summary: dict[str, object] = field(default_factory=dict)
     governance_summary: dict[str, object] = field(default_factory=dict)
     lineage_summary: dict[str, object] = field(default_factory=dict)
     license_compliance: dict[str, object] = field(default_factory=dict)

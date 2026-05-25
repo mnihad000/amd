@@ -54,6 +54,11 @@ class RunResource(BaseModel):
     iteration_policy: dict[str, Any] | None = None
     baseline_comparison: dict[str, Any] | None = None
     promotion_guard: dict[str, Any] | None = None
+    runtime_profile: dict[str, Any] | None = None
+    promotion_gate: dict[str, Any] | None = None
+    benchmark_summary: dict[str, Any] | None = None
+    benchmark_regression: dict[str, Any] | None = None
+    advanced_validation: dict[str, Any] | None = None
     governance_summary: dict[str, Any] | None = None
     lineage_summary: dict[str, Any] | None = None
     license_compliance: dict[str, Any] | None = None
@@ -532,6 +537,11 @@ class RunStore:
             iteration_policy=summary.get("iteration_policy") if isinstance(summary, dict) else None,
             baseline_comparison=summary.get("baseline_comparison_summary") if isinstance(summary, dict) else None,
             promotion_guard=summary.get("promotion_guard_summary") if isinstance(summary, dict) else None,
+            runtime_profile=summary.get("runtime_profile") if isinstance(summary, dict) else None,
+            promotion_gate=summary.get("promotion_gate_summary") if isinstance(summary, dict) else None,
+            benchmark_summary=summary.get("benchmark_summary") if isinstance(summary, dict) else None,
+            benchmark_regression=summary.get("benchmark_regression_summary") if isinstance(summary, dict) else None,
+            advanced_validation=summary.get("advanced_validation_summary") if isinstance(summary, dict) else None,
             governance_summary=summary.get("governance_summary") if isinstance(summary, dict) else None,
             lineage_summary=summary.get("lineage_summary") if isinstance(summary, dict) else None,
             license_compliance=summary.get("license_compliance") if isinstance(summary, dict) else None,

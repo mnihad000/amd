@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .config import TrainingConfig
 from .contracts import DatasetBuildResult, JobPaths, TrainingResult
+from .contracts import RuntimeProfileConfig
+from .training_hardening import apply_runtime_profile
 
 
 def train_dataset(
@@ -12,7 +14,11 @@ def train_dataset(
     review_gate: dict[str, object] | None = None,
     quota_gate: dict[str, object] | None = None,
     compliance_gate: dict[str, object] | None = None,
+    runtime_profile: RuntimeProfileConfig | None = None,
 ) -> TrainingResult:
+    if runtime_profile is not None:
+        apply_runtime_profile(runtime_profile)
+
     if compliance_gate and compliance_gate.get("export_status") == "blocked":
         reasons = compliance_gate.get("violations", ["License compliance gate blocked export/training."])
         notes = []
@@ -47,6 +53,8 @@ def train_dataset(
         data=dataset_result.data_yaml_path,
         epochs=training.epochs,
         imgsz=training.image_size,
+        seed=runtime_profile.seed if runtime_profile is not None else 42,
+        deterministic=runtime_profile.deterministic if runtime_profile is not None else True,
         project=str(output_dir.parent),
         name=output_dir.name,
         exist_ok=True,

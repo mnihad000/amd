@@ -52,6 +52,16 @@ from .sources import (
     usable_sources,
 )
 from .training import train_dataset
+from .training_hardening import (
+    add_class_failure_diagnostics,
+    apply_promotion_gate_to_iteration,
+    apply_runtime_profile,
+    build_advanced_validation_summary,
+    build_benchmark_suite,
+    build_promotion_gate,
+    build_runtime_profile,
+    check_benchmark_regression,
+)
 from .run_lifecycle import PipelineRunContext, StageName
 from .utils import ensure_dir, write_json
 from .web_search import search_web_image_candidates
@@ -67,6 +77,7 @@ class PipelineRunner:
         self._run_context = run_context
 
     def run(self) -> RunSummary:
+        apply_runtime_profile(self.config.runtime_profile)
         started_at_monotonic = time.monotonic()
         bootstrap, job_paths = self._run_stage(
             "bootstrap",
@@ -139,11 +150,25 @@ class PipelineRunner:
                 review_gate=review_gate_result,
                 quota_gate=quota_gate,
                 compliance_gate=license_report,
+                runtime_profile=self.config.runtime_profile,
             ),
         )
         evaluation_report = self._run_stage(
             "evaluation",
             lambda: evaluate_run(training_result, class_plan),
+        )
+        benchmark_suite = build_benchmark_suite(
+            evaluation_report,
+            dataset_result,
+            self.config.benchmark,
+            self.config.promotion_gate,
+        )
+        benchmark_regression = check_benchmark_regression(evaluation_report, self.config.benchmark)
+        promotion_gate = build_promotion_gate(
+            evaluation_report,
+            self.config.promotion_gate,
+            benchmark_suite,
+            benchmark_regression,
         )
         policy_target_classes = admitted_for_training or requested_classes
         promoted_baseline = load_last_promoted_baseline(
@@ -169,6 +194,14 @@ class PipelineRunner:
                 baseline=promoted_baseline,
             ),
         )
+        iteration_decision = apply_promotion_gate_to_iteration(iteration_decision, promotion_gate)
+        evaluation_report = add_class_failure_diagnostics(
+            evaluation_report,
+            class_plan,
+            iteration_decision,
+            self.config.promotion_gate,
+        )
+        advanced_validation = build_advanced_validation_summary(self.config.benchmark, self.config.runtime_profile)
 
         source_breakdown = Counter(sample.source_type for sample in balanced_samples)
         notes = bootstrap.warnings + source_notes + extraction_notes
@@ -196,6 +229,23 @@ class PipelineRunner:
                 training_result=training_result,
                 evaluation_report=evaluation_report,
                 iteration_decision=iteration_decision,
+                runtime_profile_report=build_runtime_profile(
+                    self.config.runtime_profile,
+                    training_config={
+                        "enabled": self.config.training.enabled,
+                        "model": self.config.training.model,
+                        "epochs": self.config.training.epochs,
+                        "image_size": self.config.training.image_size,
+                    },
+                    evaluation_config={
+                        "promotion_gate_enabled": self.config.promotion_gate.enabled,
+                        "benchmark_enabled": self.config.benchmark.enabled,
+                    },
+                ),
+                promotion_gate=promotion_gate,
+                benchmark_suite=benchmark_suite,
+                benchmark_regression=benchmark_regression,
+                advanced_validation=advanced_validation,
                 source_breakdown=dict(source_breakdown),
                 notes=notes,
                 admitted_for_training=admitted_for_training,
@@ -389,6 +439,11 @@ class PipelineRunner:
         training_result,
         evaluation_report,
         iteration_decision,
+        runtime_profile_report: dict[str, object],
+        promotion_gate: dict[str, object],
+        benchmark_suite: dict[str, object],
+        benchmark_regression: dict[str, object],
+        advanced_validation: dict[str, object],
         source_breakdown: dict[str, int],
         notes: list[str],
         admitted_for_training: list[str],
@@ -411,6 +466,11 @@ class PipelineRunner:
             "iteration_policy_report": str(job_paths.reports / "iteration_policy_report.json"),
             "baseline_comparison": str(job_paths.reports / "baseline_comparison.json"),
             "promotion_guard": str(job_paths.reports / "promotion_guard.json"),
+            "runtime_profile": str(job_paths.reports / "runtime_profile.json"),
+            "promotion_gate": str(job_paths.reports / "promotion_gate.json"),
+            "benchmark_suite": str(job_paths.reports / "benchmark_suite.json"),
+            "benchmark_regression": str(job_paths.reports / "benchmark_regression.json"),
+            "advanced_validation": str(job_paths.reports / "advanced_validation.json"),
             "lineage_manifest": str(job_paths.reports / "lineage_manifest.json"),
             "version_manifest": str(job_paths.reports / "version_manifest.json"),
             "license_compliance_report": str(job_paths.reports / "license_compliance_report.json"),
@@ -475,6 +535,11 @@ class PipelineRunner:
         write_json(Path(artifacts["iteration_policy_report"]), iteration_decision.policy_report)
         write_json(Path(artifacts["baseline_comparison"]), iteration_decision.baseline_comparison)
         write_json(Path(artifacts["promotion_guard"]), iteration_decision.promotion_guard)
+        write_json(Path(artifacts["runtime_profile"]), runtime_profile_report)
+        write_json(Path(artifacts["promotion_gate"]), promotion_gate)
+        write_json(Path(artifacts["benchmark_suite"]), benchmark_suite)
+        write_json(Path(artifacts["benchmark_regression"]), benchmark_regression)
+        write_json(Path(artifacts["advanced_validation"]), advanced_validation)
         write_json(Path(artifacts["lineage_manifest"]), lineage_manifest)
         write_json(Path(artifacts["version_manifest"]), version_manifest)
         write_json(Path(artifacts["license_compliance_report"]), license_report)
@@ -495,6 +560,8 @@ class PipelineRunner:
             gate_notes.extend(str(reason) for reason in quota_gate.get("reasons", []))
         if license_report.get("export_status") == "blocked":
             gate_notes.append("License compliance gate blocked export/training.")
+        if promotion_gate.get("status") == "blocked":
+            gate_notes.extend(str(reason) for reason in promotion_gate.get("block_reasons", []))
 
         summary = RunSummary(
             job_id=self.config.job_id,
@@ -519,6 +586,16 @@ class PipelineRunner:
             iteration_policy=iteration_decision.policy_report,
             baseline_comparison_summary=iteration_decision.baseline_comparison,
             promotion_guard_summary=iteration_decision.promotion_guard,
+            runtime_profile={
+                "profile_id": runtime_profile_report.get("profile_id"),
+                "seed": runtime_profile_report.get("seed"),
+                "deterministic": runtime_profile_report.get("deterministic"),
+                "container_baseline": runtime_profile_report.get("container_baseline", {}),
+            },
+            promotion_gate_summary=promotion_gate,
+            benchmark_summary=benchmark_suite.get("summary", {}),
+            benchmark_regression_summary=benchmark_regression,
+            advanced_validation_summary=advanced_validation,
             governance_summary=governance_report_summary,
             lineage_summary=lineage_manifest.get("summary", {}),
             license_compliance=license_report,

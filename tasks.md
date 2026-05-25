@@ -191,26 +191,26 @@
 - Promotion is blocked when hard thresholds or benchmark regression checks fail.
 
 **Implementation checklist**
-- [ ] Standardize training/eval runtime profile:
+- [x] Standardize training/eval runtime profile:
   - fixed random seeds
   - pinned dependencies
   - containerized execution baseline
-- [ ] Add promotion gate policy with explicit hard thresholds for core quality metrics.
-- [ ] Add deterministic benchmark suite for multi-class scenarios and long-tail stress checks.
-- [ ] Add baseline regression checks against approved benchmark snapshots.
-- [ ] Extend evaluation artifacts with class-level failure diagnostics tied to iteration actions.
-- [ ] Add optional advanced validation modes:
+- [x] Add promotion gate policy with explicit hard thresholds for core quality metrics.
+- [x] Add deterministic benchmark suite for multi-class scenarios and long-tail stress checks.
+- [x] Add baseline regression checks against approved benchmark snapshots.
+- [x] Extend evaluation artifacts with class-level failure diagnostics tied to iteration actions.
+- [x] Add optional advanced validation modes:
   - repeated-seed runs
   - cross-validation
   - keep these opt-in unless policy explicitly enables them
-- [ ] Surface additive promotion-gate outcomes in run summary/API (pass/fail reasons).
+- [x] Surface additive promotion-gate outcomes in run summary/API (pass/fail reasons).
 
 **Validation checklist (section 4)**
-- [ ] Unit: seeded runs are reproducible under fixed runtime profile.
-- [ ] Unit: promotion gate blocks failing metric thresholds.
-- [ ] Unit: benchmark regression checker blocks degraded models.
-- [ ] Integration: eval artifacts include actionable class-level failure diagnostics.
-- [ ] Regression: baseline single-class and multi-class flows still complete when thresholds pass.
+- [x] Unit: seeded runs are reproducible under fixed runtime profile.
+- [x] Unit: promotion gate blocks failing metric thresholds.
+- [x] Unit: benchmark regression checker blocks degraded models.
+- [x] Integration: eval artifacts include actionable class-level failure diagnostics.
+- [x] Regression: baseline single-class and multi-class flows still complete when thresholds pass.
 
 ### 5. Observability and Reliability Telemetry
 

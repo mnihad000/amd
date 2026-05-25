@@ -8,10 +8,13 @@ from pathlib import Path
 
 from .contracts import (
     BudgetLimits,
+    BenchmarkConfig,
     ClassQualityConfig,
     CriticThresholds,
     GovernanceConfig,
     IterationPolicyConfig,
+    PromotionGateConfig,
+    RuntimeProfileConfig,
     SourceMix,
 )
 from .utils import slugify
@@ -82,6 +85,19 @@ def _env_json_dict(name: str) -> dict[str, dict[str, float]]:
     return normalized
 
 
+def _env_str_dict(name: str) -> dict[str, str]:
+    value = os.getenv(name)
+    if value is None:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key): str(item) for key, item in payload.items()}
+
+
 @dataclass
 class SourceConfig:
     source_mode: Literal["manifest", "live"] = "manifest"
@@ -133,6 +149,9 @@ class JobConfig:
     class_quality: ClassQualityConfig = field(default_factory=ClassQualityConfig)
     iteration_policy: IterationPolicyConfig = field(default_factory=IterationPolicyConfig)
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
+    runtime_profile: RuntimeProfileConfig = field(default_factory=RuntimeProfileConfig)
+    promotion_gate: PromotionGateConfig = field(default_factory=PromotionGateConfig)
+    benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
 
 
 def build_job_config(
@@ -251,5 +270,37 @@ def build_job_config(
             ),
             retention_policy=os.getenv("GOVERNANCE_RETENTION_POLICY", "retain_until_reviewed"),
             lifecycle_status=os.getenv("GOVERNANCE_LIFECYCLE_STATUS", "active"),
+        ),
+        runtime_profile=RuntimeProfileConfig(
+            seed=_env_int("RUNTIME_SEED", 42),
+            deterministic=_env_bool("RUNTIME_DETERMINISTIC", True),
+            dependency_pins=_env_str_dict("RUNTIME_DEPENDENCY_PINS"),
+            container_image=os.getenv("RUNTIME_CONTAINER_IMAGE", "python:3.11-slim"),
+            container_digest=os.getenv("RUNTIME_CONTAINER_DIGEST"),
+            execution_baseline=os.getenv("RUNTIME_EXECUTION_BASELINE", "local-container-compatible"),
+        ),
+        promotion_gate=PromotionGateConfig(
+            enabled=_env_bool("PROMOTION_GATE_ENABLED", True),
+            min_map50=_env_float("PROMOTION_GATE_MIN_MAP50", 0.75),
+            min_precision=_env_float("PROMOTION_GATE_MIN_PRECISION", 0.7),
+            min_recall=_env_float("PROMOTION_GATE_MIN_RECALL", 0.7),
+            min_per_class_ap=_env_float("PROMOTION_GATE_MIN_PER_CLASS_AP", 0.75),
+            min_per_class_precision=_env_float("PROMOTION_GATE_MIN_PER_CLASS_PRECISION", 0.7),
+            min_per_class_recall=_env_float("PROMOTION_GATE_MIN_PER_CLASS_RECALL", 0.7),
+            block_on_benchmark_regression=_env_bool("PROMOTION_GATE_BLOCK_ON_BENCHMARK_REGRESSION", True),
+        ),
+        benchmark=BenchmarkConfig(
+            enabled=_env_bool("BENCHMARK_ENABLED", True),
+            approved_snapshot_path=Path(os.environ["BENCHMARK_APPROVED_SNAPSHOT_PATH"])
+            if os.getenv("BENCHMARK_APPROVED_SNAPSHOT_PATH")
+            else None,
+            max_map50_regression=_env_float("BENCHMARK_MAX_MAP50_REGRESSION", 0.02),
+            max_precision_regression=_env_float("BENCHMARK_MAX_PRECISION_REGRESSION", 0.02),
+            max_recall_regression=_env_float("BENCHMARK_MAX_RECALL_REGRESSION", 0.02),
+            long_tail_min_recall=_env_float("BENCHMARK_LONG_TAIL_MIN_RECALL", 0.65),
+            repeated_seed_runs=_env_bool("BENCHMARK_REPEATED_SEED_RUNS", False),
+            repeated_seed_values=[int(item) for item in _env_list("BENCHMARK_REPEATED_SEED_VALUES", ["11", "42", "73"])],
+            cross_validation=_env_bool("BENCHMARK_CROSS_VALIDATION", False),
+            cross_validation_folds=_env_int("BENCHMARK_CROSS_VALIDATION_FOLDS", 3),
         ),
     )
